@@ -1,0 +1,12 @@
+[package]
+name = "nv1-ros-opencv"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+clap.workspace = true
+
+opencv = { version = "0.94.2", features = ["clang-runtime"] }

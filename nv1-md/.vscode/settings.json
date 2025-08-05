@@ -1,0 +1,17 @@
+{
+    "cSpell.words": [
+        "baudrate",
+        "ccer",
+        "ccmr",
+        "defmt",
+        "gpioaen",
+        "gpioben",
+        "Irqs",
+        "moder",
+        "regs",
+        "setpoint",
+        "smcr",
+        "USART",
+        "vals"
+    ]
+}
