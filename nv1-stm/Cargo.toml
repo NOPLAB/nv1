@@ -4,7 +4,6 @@ members = [
 	"nv1-hub-stm32",
 	"nv1-hub-ui",
 	"nv1-hub-ui-tester",
-	"nv1-md",
 ]
 
 [workspace.dependencies]
@@ -20,3 +19,4 @@ debug = false
 lto = true
 opt-level = "s"
 incremental = true
+
