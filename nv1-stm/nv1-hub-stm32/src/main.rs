@@ -1,9 +1,12 @@
-// TODO ui MutexからRc moveに置き換える
-
 #![no_std]
 #![no_main]
 #![feature(impl_trait_in_assoc_type)]
 
+mod constants;
+mod settings;
+mod sensors;
+mod communication;
+mod ui_system;
 mod fmt;
 mod neo_pixel;
 mod omni;
@@ -11,25 +14,29 @@ mod omni;
 extern crate alloc;
 
 use embedded_alloc::LlffHeap as Heap;
-use nv1_msg::hub::HSV;
-use serde::{Deserialize, Serialize};
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
+use crate::constants::*;
+use crate::settings::*;
+use crate::sensors::*;
+use crate::communication::*;
+use crate::ui_system::UISystem;
+
 use core::f32::consts::PI;
 use core::{borrow::Borrow, cell::RefCell};
+use core::mem::MaybeUninit;
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
-use bbqueue::BBBuffer;
 use defmt::error;
 use embassy_executor::Spawner;
 use embassy_futures::select::select3;
 use embassy_stm32::exti::ExtiInput;
-use embassy_stm32::flash::{Blocking, Flash};
+use embassy_stm32::flash::Flash;
 use embassy_stm32::gpio::OutputType;
 use embassy_stm32::mode;
 use embassy_stm32::timer::low_level::CountingMode;
@@ -43,12 +50,10 @@ use embassy_stm32::{
     time::Hertz,
     usart::{self, Uart},
 };
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use embedded_graphics::prelude::{Point, Size};
 use fmt::info;
 use neo_pixel::NeoPixelPwm;
-use num_traits::{AsPrimitive, Num};
 use nv1_hub_ui::elements;
 use nv1_hub_ui::elements::Element;
 use nv1_hub_ui::elements::{Slider, Text, Value};
@@ -59,7 +64,6 @@ use nv1_hub_ui::{
     Event, HubUI,
 };
 use nv1_hub_ui::{menus, EventKey, HubUIOption};
-use rgb::RGB8;
 use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::prelude::I2CInterface;
 use ssd1306::{mode::DisplayConfig, size::DisplaySize128x64, I2CDisplayInterface, Ssd1306};
@@ -71,31 +75,6 @@ use panic_halt as _;
 #[cfg(feature = "defmt")]
 use {defmt_rtt as _, panic_probe as _};
 
-const LINE_OVER_CENTER_THRESHOLD: f32 = 140_f32.to_radians();
-const LOOP_US: u64 = 1000;
-const DEFAULT_SETTINGS: Settings = Settings {
-    line_threshold: 0.12,
-    have_ball_threshold: 800,
-    robot_speed_multiplier: 1.5,
-    opp_goal_color: GoalColor::Blue,
-    opencv_goal_blue: HSV {
-        h_min: 0,
-        h_max: 110,
-        s_min: 100,
-        s_max: 255,
-        v_min: 0,
-        v_max: 255,
-    },
-    opencv_goal_yellow: HSV {
-        h_min: 50,
-        h_max: 120,
-        s_min: 100,
-        s_max: 255,
-        v_min: 100,
-        v_max: 255,
-    },
-};
-
 bind_interrupts!(struct Irqs {
     USART3 => usart::InterruptHandler<peripherals::USART3>;
     UART4 => usart::InterruptHandler<peripherals::UART4>;
@@ -106,154 +85,11 @@ bind_interrupts!(struct Irqs {
     I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
 });
 
-static G_BB: BBBuffer<{ bno08x_rvc::BUFFER_SIZE }> = BBBuffer::new();
-static G_YAW: Mutex<ThreadModeRawMutex, RefCell<f32>> = Mutex::new(RefCell::new(0.0));
-static G_JETSON_RX: Mutex<ThreadModeRawMutex, RefCell<nv1_msg::hub::ToHub>> =
-    Mutex::new(RefCell::new(nv1_msg::hub::ToHub {
-        vel: nv1_msg::hub::Movement {
-            x: 0.0,
-            y: 0.0,
-            angle: 0.0,
-        },
-        kick: false,
-        goal_opp: None,
-        goal_own: None,
-    }));
-static G_JETSON_TX: Mutex<ThreadModeRawMutex, RefCell<nv1_msg::hub::ToJetson>> =
-    Mutex::new(RefCell::new(nv1_msg::hub::ToJetson {
-        sys: nv1_msg::hub::System {
-            pause: false,
-            shutdown: false,
-            reboot: false,
-        },
-        vel: nv1_msg::hub::Movement {
-            x: 0.0,
-            y: 0.0,
-            angle: 0.0,
-        },
-        sensor: nv1_msg::hub::Sensor {
-            ir: nv1_msg::hub::Ir {
-                x: 0.0,
-                y: 0.0,
-                strength: 0.0,
-            },
-            on_line: false,
-            have_ball: false,
-        },
-        config: nv1_msg::hub::JetsonConfig::None,
-    }));
-static G_NEO_PIXEL_DATA: Mutex<ThreadModeRawMutex, NeoPixelData> = Mutex::new(NeoPixelData {
-    jetson_connecting: false,
-    pause: false,
-    ball_dir: 0.0,
-});
-
-fn generate_adc_vec<T>(sin: &mut [T], cos: &mut [T], offset: f32, one_angle: f32, mul: f32)
-where
-    f32: AsPrimitive<T>,
-    T: Num + Copy + 'static,
-{
-    for i in 0..sin.len() {
-        sin[i] = (libm::sinf(i as f32 * one_angle + offset) * mul).as_();
-        cos[i] = (libm::cosf(i as f32 * one_angle + offset) * mul).as_();
-    }
-}
-
-fn calculate_adc_vec<T>(adc: &[T], adc_sin: &[T], adc_cos: &[T], _mul: T) -> (f32, f32, T)
-where
-    T: Num + Copy + 'static + AsPrimitive<f32> + PartialOrd,
-    f32: AsPrimitive<T>,
-{
-    let mut sum_x: f32 = 0.0;
-    let mut sum_y: f32 = 0.0;
-    let mut max_adc: T = T::zero();
-
-    for i in 0..adc.len() {
-        if adc[i] > max_adc {
-            max_adc = adc[i];
-        }
-        sum_x = sum_x + (adc_cos[i] * adc[i]).as_();
-        sum_y = sum_y + (adc_sin[i] * adc[i]).as_();
-    }
-
-    let norm = libm::sqrtf(
-        libm::powf(sum_x / adc.len() as f32, 2.0) + libm::powf(sum_y / adc.len() as f32, 2.0),
-    );
-
-    (
-        sum_x / adc.len() as f32 / norm,
-        sum_y / adc.len() as f32 / norm,
-        max_adc,
-    )
-}
-
-fn calculate_line_vec(
-    adc: &[f32],
-    adc_sin: &[f32],
-    adc_cos: &[f32],
-    threshold: f32,
-) -> Option<(f32, f32)> {
-    let mut sum_x: f32 = 0.0;
-    let mut sum_y: f32 = 0.0;
-
-    let mut over_threshold = false;
-
-    for i in 0..adc.len() {
-        if adc[i] > threshold {
-            sum_x = sum_x + adc_cos[i];
-            sum_y = sum_y + adc_sin[i];
-
-            over_threshold = true;
-        }
-    }
-
-    if !over_threshold {
-        return None;
-    }
-
-    let norm = libm::sqrtf(libm::powf(sum_x, 2.0) + libm::powf(sum_y, 2.0));
-
-    Some((sum_x / norm, sum_y / norm))
-}
-
-fn is_angle_in_range(angle: f32, a: f32, b: f32) -> bool {
-    let normalize = |x: f32| -> f32 {
-        let mut x = x;
-        while x > PI {
-            x -= 2.0 * PI;
-        }
-        while x <= -PI {
-            x += 2.0 * PI;
-        }
-        x
-    };
-
-    let a = normalize(a);
-    let b = normalize(b);
-    let angle = normalize(angle);
-
-    if libm::fabsf(b - a) <= PI {
-        // 通常の範囲チェック
-        a <= angle && angle <= b
-    } else {
-        // 逆の狭い範囲を考える
-        !(b <= angle && angle <= a)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
-enum GoalColor {
-    #[default]
-    Blue,
-    Yellow,
-}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // initialize static heap
     {
-        use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 2048;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
     }
@@ -289,7 +125,7 @@ async fn main(spawner: Spawner) {
 
     // initialize UARTs
     let mut uart_jetson_config = usart::Config::default();
-    uart_jetson_config.baudrate = 2_000_000;
+    uart_jetson_config.baudrate = UART_JETSON_BAUDRATE;
     let uart_jetson = Uart::new(
         p.USART3,
         p.PC5,
@@ -302,7 +138,7 @@ async fn main(spawner: Spawner) {
     .unwrap();
 
     let mut uart_md_config = usart::Config::default();
-    uart_md_config.baudrate = 2_000_000;
+    uart_md_config.baudrate = UART_MD_BAUDRATE;
     let mut uart_md = Uart::new(
         p.UART4,
         p.PC11,
@@ -333,53 +169,29 @@ async fn main(spawner: Spawner) {
     gpio_reset.set_high();
     Timer::after(Duration::from_millis(100)).await;
 
-    // initialize ADC
-    let mut adc = Adc::new(p.ADC1);
-    adc.set_sample_time(embassy_stm32::adc::SampleTime::CYCLES3);
+    // initialize sensor system
+    let adc = Adc::new(p.ADC1);
+    let line_s0 = Output::new(p.PB12, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
+    let line_s1 = Output::new(p.PB13, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
+    let line_s2 = Output::new(p.PB14, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
+    let line_s3 = Output::new(p.PB15, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
+    let ir_s0 = Output::new(p.PB0, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
+    let ir_s1 = Output::new(p.PB1, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
+    let ir_s2 = Output::new(p.PB4, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
+    let ir_s3 = Output::new(p.PB5, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
 
-    let mut line_s0 = Output::new(p.PB12, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-    let mut line_s1 = Output::new(p.PB13, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-    let mut line_s2 = Output::new(p.PB14, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-    let mut line_s3 = Output::new(p.PB15, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-
-    let mut ir_s0 = Output::new(p.PB0, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-    let mut ir_s1 = Output::new(p.PB1, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-    let mut ir_s2 = Output::new(p.PB4, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-    let mut ir_s3 = Output::new(p.PB5, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
-
-    let mut adc_line_sin = [0.0_f32; 32];
-    let mut adc_line_cos = [0.0_f32; 32];
-    generate_adc_vec(
-        &mut adc_line_sin,
-        &mut adc_line_cos,
-        90.0_f32.to_radians(),
-        -(360.0_f32 / 32.0_f32).to_radians(),
-        1.0,
-    );
-    info!("adc_line_sin: {:?}", adc_line_sin);
-    info!("adc_line_cos: {:?}", adc_line_cos);
-
-    let mut adc_ir_sin = [0.0_f32; 16];
-    let mut adc_ir_cos = [0.0_f32; 16];
-    generate_adc_vec(
-        &mut adc_ir_sin,
-        &mut adc_ir_cos,
-        90_f32.to_radians(),
-        -(360.0_f32 / 16.0_f32).to_radians(),
-        1.0,
+    let mut sensor_system = SensorSystem::new(
+        adc, line_s0, line_s1, line_s2, line_s3,
+        ir_s0, ir_s1, ir_s2, ir_s3,
     );
 
-    // initialize flash
+    // initialize flash and settings
     let f = Rc::new(RefCell::new(Flash::new_blocking(p.FLASH)));
-    let settings = Rc::new(RefCell::new(
-        flash_read(&mut f.clone().borrow_mut()).unwrap_or(DEFAULT_SETTINGS),
-    ));
-    if settings.borrow_mut().line_threshold.is_nan() {
-        settings.borrow_mut().line_threshold = 0.12;
-        flash_write(&mut f.clone().borrow_mut(), &settings.borrow_mut()).unwrap();
-    }
+    let mut settings_data = flash_read(&mut f.clone().borrow_mut()).unwrap_or(Settings::DEFAULT);
+    validate_and_fix_settings(&mut settings_data, &mut f.clone().borrow_mut()).unwrap();
+    let settings = Rc::new(RefCell::new(settings_data));
 
-    info!("line strength: {}", settings.borrow_mut().line_threshold);
+    info!("line strength: {}", settings.as_ref().borrow().line_threshold);
 
     // UI
     let gpio_ui_toggle = ExtiInput::new(p.PC12, p.EXTI12, Pull::None);
@@ -426,10 +238,12 @@ async fn main(spawner: Spawner) {
         }
     }
 
+    // Create UI values using the UI system
+    let (shutdown, reboot, value_line, value_have_ball) = UISystem::create_ui_and_values();
+
     // UI view
     let ui_text_interface = Text::new("INTERFACE", embedded_graphics::mono_font::ascii::FONT_6X10);
 
-    let shutdown = Rc::new(RefCell::new(false));
     let shutdown_clone = shutdown.clone();
     let ui_button_shutdown = Button::new(
         "Shutdown",
@@ -439,7 +253,6 @@ async fn main(spawner: Spawner) {
         embedded_graphics::mono_font::ascii::FONT_6X10,
     );
 
-    let reboot = Rc::new(RefCell::new(false));
     let reboot_clone = reboot.clone();
     let ui_button_reboot = Button::new(
         "Reboot",
@@ -479,7 +292,6 @@ async fn main(spawner: Spawner) {
         embedded_graphics::mono_font::ascii::FONT_6X10,
     );
 
-    let value_line = Rc::new(RefCell::new(0.0));
     let line_value_clone = value_line.clone();
     let ui_value_line = Value::new(
         "L",
@@ -504,7 +316,6 @@ async fn main(spawner: Spawner) {
         embedded_graphics::mono_font::ascii::FONT_6X10,
     );
 
-    let value_have_ball = Rc::new(RefCell::new(0));
     let have_ball_value_clone = value_have_ball.clone();
     let ui_value_have_ball = Value::new(
         "B",
@@ -551,7 +362,7 @@ async fn main(spawner: Spawner) {
         "Reset",
         move |pressed| {
             if pressed {
-                flash_write(&mut f_clone.borrow_mut(), &DEFAULT_SETTINGS).unwrap();
+                flash_write(&mut f_clone.borrow_mut(), &Settings::DEFAULT).unwrap();
                 settings_clone.replace(flash_read(&mut f_clone.borrow_mut()).unwrap());
             }
         },
@@ -639,186 +450,44 @@ async fn main(spawner: Spawner) {
         OnLine(f32, f32, f32, u32),
         OutOfLineOverCenter(f32, f32, f32, u32),
     }
-    let mut prev_line_state = AdcState::OnGround;
+    let _prev_line_state = AdcState::OnGround;
 
+    // Spawn communication tasks
     spawner.must_spawn(bno08x_task(uart_bno));
     spawner.must_spawn(uart_jetson_task(uart_jetson));
+    
+    // Spawn UI task if display initialized successfully
     if ssd1306_init_success {
         spawner.must_spawn(ui_task(ui, gpio_ui_up, gpio_ui_down, gpio_ui_enter));
     }
-    spawner.must_spawn(neo_pixel_task(neo_pixel, neo_pixel_dma));
+    
+    // Spawn NeoPixel task
+    spawner.must_spawn(neo_pixel::neo_pixel_task(neo_pixel, neo_pixel_dma));
 
     info!("[nv1-hub] initialized");
 
+    let mut line_processor = LineProcessor::new();
     let mut prev_time = Instant::now();
+    
     loop {
         let settings = settings.as_ref().borrow().clone();
-
         let yaw = G_YAW.lock().await.clone().take();
 
-        let mut adc_line = [0u16; 32];
-        let mut adc_ir = [0u16; 16];
-        let adc_have_ball = adc.blocking_read(&mut p.PC3);
-        for i in 0..16 {
-            if i & 0b0001 != 0 {
-                line_s0.set_high();
-            } else {
-                line_s0.set_low();
-            }
-            if i & 0b0010 != 0 {
-                line_s1.set_high();
-            } else {
-                line_s1.set_low();
-            }
-            if i & 0b0100 != 0 {
-                line_s2.set_high();
-            } else {
-                line_s2.set_low();
-            }
-            if i & 0b1000 != 0 {
-                line_s3.set_high();
-            } else {
-                line_s3.set_low();
-            }
-
-            if i & 0b0001 != 0 {
-                ir_s0.set_high();
-            } else {
-                ir_s0.set_low();
-            }
-            if i & 0b0010 != 0 {
-                ir_s1.set_high();
-            } else {
-                ir_s1.set_low();
-            }
-            if i & 0b0100 != 0 {
-                ir_s2.set_high();
-            } else {
-                ir_s2.set_low();
-            }
-            if i & 0b1000 != 0 {
-                ir_s3.set_high();
-            } else {
-                ir_s3.set_low();
-            }
-
-            adc_line[i] = adc.blocking_read(&mut p.PC0);
-            adc_line[i + 16] = adc.blocking_read(&mut p.PC1);
-            adc_ir[i] = adc.blocking_read(&mut p.PC2);
-        }
-
-        let adc_line = adc_line
-            .iter()
-            .map(|x| (*x as f32) / 4096.0)
-            .collect::<Vec<_>>();
-
-        let on_line = calculate_line_vec(
-            &adc_line,
-            &adc_line_sin,
-            &adc_line_cos,
+        let sensor_readings = sensor_system.read_sensors(&mut p.PC0, &mut p.PC1, &mut p.PC2, &mut p.PC3);
+        
+        let on_line = calculate_line_vec_with_threshold(
+            &sensor_readings.adc_line,
+            &sensor_system.adc_line_sin,
+            &sensor_system.adc_line_cos,
             settings.line_threshold,
         );
 
-        let calc_line: Option<(f32, f32)> = match prev_line_state {
-            AdcState::OnGround => {
-                if let Some((x, y)) = on_line {
-                    // prev: on Ground, now: on Line
-                    // info!("[LINE] Line detected");
+        let calc_line = line_processor.process_line(on_line, settings.line_threshold);
 
-                    let now_angle = libm::atan2f(y, x);
-
-                    prev_line_state = AdcState::OnLine(now_angle, x, y, 0);
-                    Some((-x, -y))
-                } else {
-                    // prev: on Ground, now: on Ground
-                    prev_line_state = AdcState::OnGround;
-                    None
-                }
-            }
-            AdcState::OnLine(first_angle, first_x, first_y, counter) => {
-                if let Some((x, y)) = on_line {
-                    // prev: on Line, now: on Line
-                    let now_angle = libm::atan2f(y, x);
-
-                    // 制限範囲を超えている
-                    if !is_angle_in_range(
-                        now_angle,
-                        first_angle - LINE_OVER_CENTER_THRESHOLD / 2.0,
-                        first_angle + LINE_OVER_CENTER_THRESHOLD / 2.0,
-                    ) {
-                        // prev: on Line, now: out of Center
-                        prev_line_state =
-                            AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, 0);
-                        // info!(
-                        //     "[LINE] Out of line new_angle: {}, prev_angle: {}",
-                        //     now_angle, first_angle
-                        // );
-                        Some((-x, -y))
-                    } else {
-                        // prev: on Line, now: on Line
-                        prev_line_state = AdcState::OnLine(first_angle, first_x, first_y, 0);
-                        Some((-x, -y))
-                    }
-                } else {
-                    // prev: on Line, now: on Ground
-                    if counter > 100 {
-                        // info!("[LINE] Line lost");
-                        prev_line_state = AdcState::OnGround;
-                        None
-                    } else {
-                        prev_line_state =
-                            AdcState::OnLine(first_angle, first_x, first_y, counter + 1);
-                        Some((-first_x, -first_y))
-                    }
-                }
-            }
-            AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter) => {
-                if on_line.is_some() {
-                    prev_line_state =
-                        AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter + 1);
-                    Some((-first_x, -first_y))
-                } else {
-                    if counter > 100 {
-                        prev_line_state = AdcState::OnGround;
-                        None
-                    } else {
-                        prev_line_state = AdcState::OutOfLineOverCenter(
-                            first_angle,
-                            first_x,
-                            first_y,
-                            counter + 1,
-                        );
-                        Some((-first_x, -first_y))
-                    }
-                }
-            }
-        };
-
-        let adc_line_max = adc_line.into_iter().reduce(f32::max).unwrap_or(0.);
-        adc_ir.iter_mut().for_each(|x| *x = 4096 - *x);
-        let adc_ir = adc_ir
-            .iter()
-            .map(|x| (*x as f32) / 4096.0)
-            .collect::<Vec<_>>();
-        let (ir_x, ir_y, _ir_strength) = calculate_adc_vec(&adc_ir, &adc_ir_sin, &adc_ir_cos, 1.0);
-        // let adc_ir_over_count = adc_ir.iter().filter(|x| **x > IR_COUNT_THRESHOLD).count();
-        // info!("IR over count: {}", adc_ir_over_count);
-        let ir_angle = libm::atan2f(ir_y, ir_x);
-        // info!("IR angle: {}", ir_angle);
-        // let ir_vel = if adc_ir_over_count > 10
-        //     && ir_angle > PI / 2.0 - IR_ANGLE_THRESHOLD
-        //     && ir_angle < PI / 2.0 + IR_ANGLE_THRESHOLD
-        // {
-        //     Some((ir_x * 0.8, 0.4))
-        // } else {
-        //     None
-        // };
-        // info!("line_strength: {}", line_strength);
-        // info!("line_strength: {}", settings.borrow_mut().line_strength);
 
         let received_msg = G_JETSON_RX.lock().await.clone();
         let (vel_x, vel_y) = if let Some((line_x, line_y)) = calc_line {
-            (line_x * 1.5, line_y * 1.5)
+            (line_x * LINE_SPEED_MULTIPLIER, line_y * LINE_SPEED_MULTIPLIER)
         } else {
             (
                 received_msg.borrow().vel.x * settings.robot_speed_multiplier,
@@ -890,12 +559,12 @@ async fn main(spawner: Spawner) {
             },
             sensor: nv1_msg::hub::Sensor {
                 ir: nv1_msg::hub::Ir {
-                    x: ir_x,
-                    y: ir_y,
+                    x: sensor_readings.ir_x,
+                    y: sensor_readings.ir_y,
                     strength: 0.0,
                 },
                 on_line: on_line.is_some(),
-                have_ball: adc_have_ball < settings.have_ball_threshold,
+                have_ball: sensor_readings.adc_have_ball < settings.have_ball_threshold,
             },
             config: nv1_msg::hub::JetsonConfig::OpenCV(nv1_msg::hub::OpenCVConfig {
                 opp_color,
@@ -904,12 +573,12 @@ async fn main(spawner: Spawner) {
         };
         G_JETSON_TX.lock().await.replace(msg_tx);
 
-        G_NEO_PIXEL_DATA.lock().await.ball_dir = ir_angle;
+        G_NEO_PIXEL_DATA.lock().await.ball_dir = sensor_readings.ir_angle;
         G_NEO_PIXEL_DATA.lock().await.pause = pause;
 
         // update UI buf
-        value_line.replace(adc_line_max);
-        value_have_ball.replace(adc_have_ball);
+        value_line.replace(sensor_readings.adc_line_max);
+        value_have_ball.replace(sensor_readings.adc_have_ball);
 
         let now_time = Instant::now();
         let elapsed_time = now_time - prev_time;
@@ -1075,118 +744,3 @@ async fn ui_task(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct NeoPixelData {
-    pub jetson_connecting: bool,
-    pub pause: bool,
-    pub ball_dir: f32,
-}
-
-#[embassy_executor::task]
-async fn neo_pixel_task(
-    mut neo_pixel: NeoPixelPwm<peripherals::TIM4>,
-    dma: &'static mut peripherals::DMA1_CH0,
-) {
-    const LED_COUNT: usize = 32;
-
-    let mut neo_pixel_data = [RGB8::default(); LED_COUNT];
-    for c in neo_pixel_data.iter_mut() {
-        *c = RGB8 { r: 0, g: 0, b: 0 };
-    }
-
-    const SPREAD_PATTERN: [usize; 32] = [
-        0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 4, 4, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0,
-        0, 0,
-    ];
-
-    let mut loop_count = 0;
-    loop {
-        let neo_pixel_info = G_NEO_PIXEL_DATA.lock().await.clone();
-
-        if neo_pixel_info.pause {
-            // windows loading
-            let color = if neo_pixel_info.jetson_connecting {
-                RGB8 { r: 0, g: 255, b: 0 }
-            } else {
-                RGB8 { r: 255, g: 0, b: 0 }
-            };
-
-            let base_index = loop_count % LED_COUNT;
-            let spread = SPREAD_PATTERN[loop_count % 32];
-            for j in 0..3 {
-                let offset = spread * (j as isize - 1) as usize; // 左右に広がる動き
-                let index = (base_index + offset) % LED_COUNT;
-                neo_pixel_data[index] = color;
-            }
-
-            neo_pixel.set_colors(dma, &mut neo_pixel_data).await;
-
-            Timer::after(Duration::from_millis(30)).await;
-        } else {
-            // ball dir
-            let ball_dir = neo_pixel_info.ball_dir;
-            let ball_dir = -ball_dir + (PI / 2.0); // offset
-            let ball_dir = (ball_dir + 2.0 * PI) % (2.0 * PI); // 0 ~ 2PI
-            let ball_dir = (ball_dir / (2.0 * PI)) * (LED_COUNT as f32); // 0 ~ LED_COUNT
-
-            for i in 0..LED_COUNT {
-                let color = if i == ball_dir as usize {
-                    RGB8 {
-                        r: 255,
-                        g: 255,
-                        b: 255,
-                    }
-                } else {
-                    RGB8 { r: 0, g: 0, b: 0 }
-                };
-                neo_pixel_data[i] = color;
-            }
-
-            // neo_pixel.set_colors(dma, &mut neo_pixel_data).await;
-
-            Timer::after(Duration::from_millis(100)).await;
-        }
-
-        loop_count = (loop_count + 1) % LED_COUNT;
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
-struct Settings {
-    pub line_threshold: f32,
-    pub have_ball_threshold: u16,
-    pub opp_goal_color: GoalColor,
-    pub opencv_goal_blue: nv1_msg::hub::HSV,
-    pub opencv_goal_yellow: nv1_msg::hub::HSV,
-    pub robot_speed_multiplier: f32,
-}
-
-fn flash_read(f: &mut Flash<'_, Blocking>) -> Result<Settings, embassy_stm32::flash::Error> {
-    let mut buf = [0u8; 128];
-    f.blocking_read(0x6_0000, &mut buf)?;
-
-    info!("flash read: {:?}", buf);
-
-    let decoded = match postcard::from_bytes(&buf) {
-        Ok(d) => d,
-        Err(_) => {
-            error!("flash read error");
-            DEFAULT_SETTINGS
-        }
-    };
-
-    Ok(decoded)
-}
-
-fn flash_write(
-    f: &mut Flash<'_, Blocking>,
-    settings: &Settings,
-) -> Result<(), embassy_stm32::flash::Error> {
-    let mut buf = [0u8; 128];
-    postcard::to_slice(settings, &mut buf).unwrap();
-
-    f.blocking_erase(0x6_0000, 0x6_0000 + 128 * 1024)?;
-    f.blocking_write(0x6_0000, &buf)?;
-
-    Ok(())
-}

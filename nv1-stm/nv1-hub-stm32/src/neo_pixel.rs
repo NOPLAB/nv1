@@ -1,10 +1,22 @@
 use embassy_stm32::{
     time::Hertz,
     timer::{simple_pwm::SimplePwm, Ch1Dma, GeneralInstance4Channel},
+    peripherals,
 };
+use embassy_time::{Duration, Timer};
 use rgb::RGB8;
+use core::f32::consts::PI;
+
+use crate::constants::{LED_COUNT, SPREAD_PATTERN};
 
 const NEO_PIXEL_NUM: usize = 32;
+
+#[derive(Debug, Clone, Copy)]
+pub struct NeoPixelData {
+    pub jetson_connecting: bool,
+    pub pause: bool,
+    pub ball_dir: f32,
+}
 
 pub struct NeoPixelPwm<T>
 where
@@ -97,5 +109,62 @@ where
         } else {
             self.brightness = brightness;
         }
+    }
+}
+
+#[embassy_executor::task]
+pub async fn neo_pixel_task(
+    mut neo_pixel: NeoPixelPwm<peripherals::TIM4>,
+    dma: &'static mut peripherals::DMA1_CH0,
+) {
+    let mut neo_pixel_data = [RGB8::default(); LED_COUNT];
+    for c in neo_pixel_data.iter_mut() {
+        *c = RGB8 { r: 0, g: 0, b: 0 };
+    }
+
+    let mut loop_count = 0;
+    loop {
+        let neo_pixel_info = crate::communication::G_NEO_PIXEL_DATA.lock().await.clone();
+
+        if neo_pixel_info.pause {
+            let color = if neo_pixel_info.jetson_connecting {
+                RGB8 { r: 0, g: 255, b: 0 }
+            } else {
+                RGB8 { r: 255, g: 0, b: 0 }
+            };
+
+            let base_index = loop_count % LED_COUNT;
+            let spread = SPREAD_PATTERN[loop_count % 32];
+            for j in 0..3 {
+                let offset = spread * (j as isize - 1) as usize;
+                let index = (base_index + offset) % LED_COUNT;
+                neo_pixel_data[index] = color;
+            }
+
+            neo_pixel.set_colors(dma, &mut neo_pixel_data).await;
+            Timer::after(Duration::from_millis(30)).await;
+        } else {
+            let ball_dir = neo_pixel_info.ball_dir;
+            let ball_dir = -ball_dir + (PI / 2.0);
+            let ball_dir = (ball_dir + 2.0 * PI) % (2.0 * PI);
+            let ball_dir = (ball_dir / (2.0 * PI)) * (LED_COUNT as f32);
+
+            for i in 0..LED_COUNT {
+                let color = if i == ball_dir as usize {
+                    RGB8 {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                    }
+                } else {
+                    RGB8 { r: 0, g: 0, b: 0 }
+                };
+                neo_pixel_data[i] = color;
+            }
+
+            Timer::after(Duration::from_millis(100)).await;
+        }
+
+        loop_count = (loop_count + 1) % LED_COUNT;
     }
 }
