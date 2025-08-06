@@ -1,8 +1,6 @@
-# This file was automatically generated.
-
 [package]
 edition = "2021"
-name = "nv1-md"
+name = "nv1-stm32-md"
 version = "0.1.0"
 
 [dependencies]
@@ -42,20 +40,20 @@ libm = "0.2.11"
 midly = { version = "0.5.3", default-features = false }
 
 [[bin]]
-name = "nv1-md"
+name = "nv1-stm32-md"
 test = false
 bench = false
 
 [profile.dev]
 debug = true
 lto = true
-opt-level = "z"
+opt-level = 3
 incremental = true
 
 [profile.release]
 debug = false
 lto = true
-opt-level = "z"
+opt-level = 3
 incremental = true
 
 [features]
