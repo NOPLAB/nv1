@@ -1,11 +1,10 @@
 use embassy_stm32::{
     time::Hertz,
     timer::{
-        complementary_pwm::ComplementaryPwm, simple_pwm::SimplePwm, AdvancedInstance4Channel,
-        Channel,
+        complementary_pwm::ComplementaryPwm, simple_pwm::SimplePwm, CaptureCompare16bitInstance,
+        Channel, ComplementaryCaptureCompare16bitInstance,
     },
 };
-use embedded_hal::Pwm;
 
 pub trait MotorGroup {
     fn set_speed1(&mut self, speed: i16);
@@ -22,7 +21,7 @@ pub struct Motor {
 
 pub struct MotorGroupComplementary<'a, TIM>
 where
-    TIM: AdvancedInstance4Channel,
+    TIM: ComplementaryCaptureCompare16bitInstance,
 {
     pwm: ComplementaryPwm<'a, TIM>,
     motor1: Motor,
@@ -32,7 +31,7 @@ where
 
 impl<'a, TIM> MotorGroupComplementary<'a, TIM>
 where
-    TIM: AdvancedInstance4Channel,
+    TIM: ComplementaryCaptureCompare16bitInstance,
 {
     pub fn new(
         pwm: ComplementaryPwm<'a, TIM>,
@@ -61,17 +60,17 @@ where
 
 impl<'a, TIM> MotorGroup for MotorGroupComplementary<'a, TIM>
 where
-    TIM: AdvancedInstance4Channel,
+    TIM: ComplementaryCaptureCompare16bitInstance,
 {
     fn set_speed1(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor1.ch_a, ((speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor1.ch_a, (speed as f32 * self.multiply) as u16);
             self.pwm.set_duty(self.motor1.ch_b, 0);
         } else {
             self.pwm.set_duty(self.motor1.ch_a, 0);
             self.pwm
-                .set_duty(self.motor1.ch_b, ((-speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor1.ch_b, (-speed as f32 * self.multiply) as u16);
         }
     }
 
@@ -83,12 +82,12 @@ where
     fn set_speed2(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor2.ch_a, ((speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor2.ch_a, (speed as f32 * self.multiply) as u16);
             self.pwm.set_duty(self.motor2.ch_b, 0);
         } else {
             self.pwm.set_duty(self.motor2.ch_a, 0);
             self.pwm
-                .set_duty(self.motor2.ch_b, ((-speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor2.ch_b, (-speed as f32 * self.multiply) as u16);
         }
     }
 
@@ -104,7 +103,7 @@ where
 
 pub struct MotorGroupSimple<'a, TIM>
 where
-    TIM: AdvancedInstance4Channel,
+    TIM: CaptureCompare16bitInstance,
 {
     pwm: SimplePwm<'a, TIM>,
     motor1: Motor,
@@ -114,7 +113,7 @@ where
 
 impl<'a, TIM> MotorGroupSimple<'a, TIM>
 where
-    TIM: AdvancedInstance4Channel,
+    TIM: CaptureCompare16bitInstance,
 {
     pub fn new(
         pwm: SimplePwm<'a, TIM>,
@@ -143,17 +142,17 @@ where
 
 impl<'a, TIM> MotorGroup for MotorGroupSimple<'a, TIM>
 where
-    TIM: AdvancedInstance4Channel,
+    TIM: CaptureCompare16bitInstance,
 {
     fn set_speed1(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor1.ch_a, ((speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor1.ch_a, (speed as f32 * self.multiply) as u16);
             self.pwm.set_duty(self.motor1.ch_b, 0);
         } else {
             self.pwm.set_duty(self.motor1.ch_a, 0);
             self.pwm
-                .set_duty(self.motor1.ch_b, ((-speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor1.ch_b, (-speed as f32 * self.multiply) as u16);
         }
     }
 
@@ -165,12 +164,12 @@ where
     fn set_speed2(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor2.ch_a, ((speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor2.ch_a, (speed as f32 * self.multiply) as u16);
             self.pwm.set_duty(self.motor2.ch_b, 0);
         } else {
             self.pwm.set_duty(self.motor2.ch_a, 0);
             self.pwm
-                .set_duty(self.motor2.ch_b, ((-speed as f32 * self.multiply) as u16).into());
+                .set_duty(self.motor2.ch_b, (-speed as f32 * self.multiply) as u16);
         }
     }
 

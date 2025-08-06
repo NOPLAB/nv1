@@ -1,13 +1,14 @@
 #![no_std]
 #![no_main]
-#![feature(impl_trait_in_assoc_type)]
 
 mod fmt;
 mod motor;
 
 extern crate alloc;
 
+use alloc::vec::Vec;
 use embedded_alloc::LlffHeap as Heap;
+use midly::num::u7;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -27,7 +28,8 @@ use motor::{MotorGroupComplementary, MotorGroupSimple, Motors};
 use embassy_executor::Spawner;
 use embassy_stm32::{
     bind_interrupts,
-    gpio::OutputType,
+    gpio::{low_level::Pin, OutputType},
+    pac::{self, common::W, timer::vals::Sms},
     timer::{
         complementary_pwm::{ComplementaryPwm, ComplementaryPwmPin},
         simple_pwm::{PwmPin, SimplePwm},
@@ -35,17 +37,16 @@ use embassy_stm32::{
     },
     usart::Uart,
 };
+use embassy_stm32::{pac::timer::vals::CcmrInputCcs, rcc::low_level::RccPeripheral};
 use embassy_stm32::{
     peripherals,
     usart::{self, Config},
 };
 use embassy_stm32::{
     time::Hertz,
+    timer::low_level::{GeneralPurpose16bitInstance, GeneralPurpose32bitInstance},
 };
 use embassy_time::{with_timeout, Duration, Timer};
-use stm32_metapac as pac;
-use stm32_metapac::timer::vals::{CcmrInputCcs, Sms};
-use embedded_hal::Pwm;
 
 use fmt::info;
 
@@ -187,25 +188,27 @@ async fn main(spawner: Spawner) {
     // encoder mode tim5 motor1
 
     // initialize gpio
-    pac::GPIOA
+    p.PA0
+        .block()
         .moder()
         .modify(|r| r.set_moder(0, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOA.afr(0).modify(|r| r.set_afr(0, 2));
-    pac::GPIOA
+    p.PA0.block().afr(0).modify(|r| r.set_afr(0, 2));
+    p.PA1
+        .block()
         .moder()
         .modify(|r| r.set_moder(1, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOA.afr(0).modify(|r| r.set_afr(1, 2));
+    p.PA1.block().afr(0).modify(|r| r.set_afr(1, 2));
 
     // initialize tim
-    pac::RCC.apb1enr().modify(|r| r.set_tim5en(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim5rst(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim5rst(false));
+    peripherals::TIM5::enable_and_reset();
 
-    let tim5 = pac::TIM5;
+    let tim5 = peripherals::TIM5::regs_gp32();
 
-    tim5.psc().write(|w| *w = 0);
-    tim5.arr().write(|w| *w = ENCODER_TIM_MAX_VALUE as u32);
-    tim5.cnt().write(|w| *w = ENCODER_TIM_HALF_VALUE as u32);
+    tim5.psc().write(|w| w.set_psc(0));
+    tim5.arr()
+        .write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE as u32));
+    tim5.cnt()
+        .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
     tim5.ccmr_input(0)
         .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
     tim5.ccmr_input(0)
@@ -219,25 +222,25 @@ async fn main(spawner: Spawner) {
     // encoder mode tim3 motor2
 
     // initialize gpio
-    pac::GPIOB
+    p.PB4
+        .block()
         .moder()
         .modify(|r| r.set_moder(4, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOB.afr(0).modify(|r| r.set_afr(4, 2));
-    pac::GPIOB
+    p.PB4.block().afr(0).modify(|r| r.set_afr(4, 2));
+    p.PB5
+        .block()
         .moder()
         .modify(|r| r.set_moder(5, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOB.afr(0).modify(|r| r.set_afr(5, 2));
+    p.PB5.block().afr(0).modify(|r| r.set_afr(5, 2));
 
     // initialize tim
-    pac::RCC.apb1enr().modify(|r| r.set_tim3en(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim3rst(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim3rst(false));
+    peripherals::TIM3::enable_and_reset();
 
-    let tim3 = pac::TIM3;
+    let tim3 = peripherals::TIM3::regs_gp16();
 
-    tim3.psc().write(|w| *w = 0);
-    tim3.arr().write(|w| *w = stm32_metapac::timer::regs::ArrCore(ENCODER_TIM_MAX_VALUE as u32));
-    tim3.cnt().write(|w| *w = stm32_metapac::timer::regs::CntCore(ENCODER_TIM_HALF_VALUE as u32));
+    tim3.psc().write(|w| w.set_psc(0));
+    tim3.arr().write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE));
+    tim3.cnt().write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE));
     tim3.ccmr_input(0)
         .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
     tim3.ccmr_input(0)
@@ -251,25 +254,25 @@ async fn main(spawner: Spawner) {
     // encoder mod tim4 motor3
 
     // initialize gpio
-    pac::GPIOB
+    p.PB6
+        .block()
         .moder()
         .modify(|r| r.set_moder(6, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOB.afr(0).modify(|r| r.set_afr(6, 2));
-    pac::GPIOB
+    p.PB6.block().afr(0).modify(|r| r.set_afr(6, 2));
+    p.PB7
+        .block()
         .moder()
         .modify(|r| r.set_moder(7, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOB.afr(0).modify(|r| r.set_afr(7, 2));
+    p.PB7.block().afr(0).modify(|r| r.set_afr(7, 2));
 
     // initialize tim
-    pac::RCC.apb1enr().modify(|r| r.set_tim4en(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim4rst(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim4rst(false));
+    peripherals::TIM4::enable_and_reset();
 
-    let tim4 = pac::TIM4;
+    let tim4 = peripherals::TIM4::regs_gp16();
 
-    tim4.psc().write(|w| *w = 0);
-    tim4.arr().write(|w| *w = stm32_metapac::timer::regs::ArrCore(ENCODER_TIM_MAX_VALUE as u32));
-    tim4.cnt().write(|w| *w = stm32_metapac::timer::regs::CntCore(ENCODER_TIM_HALF_VALUE as u32));
+    tim4.psc().write(|w| w.set_psc(0));
+    tim4.arr().write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE));
+    tim4.cnt().write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE));
     tim4.ccmr_input(0)
         .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
     tim4.ccmr_input(0)
@@ -283,25 +286,27 @@ async fn main(spawner: Spawner) {
     // encoder mode tim2 motor4
 
     // initialize gpio
-    pac::GPIOA
+    p.PA15
+        .block()
         .moder()
         .modify(|r| r.set_moder(15, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOA.afr(1).modify(|r| r.set_afr(7, 1));
-    pac::GPIOB
+    p.PA15.block().afr(1).modify(|r| r.set_afr(7, 1));
+    p.PB9
+        .block()
         .moder()
         .modify(|r| r.set_moder(9, pac::gpio::vals::Moder::ALTERNATE));
-    pac::GPIOB.afr(1).modify(|r| r.set_afr(1, 1));
+    p.PB9.block().afr(1).modify(|r| r.set_afr(1, 1));
 
     // initialize tim
-    pac::RCC.apb1enr().modify(|r| r.set_tim2en(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim2rst(true));
-    pac::RCC.apb1rstr().modify(|r| r.set_tim2rst(false));
+    peripherals::TIM2::enable_and_reset();
 
-    let tim2 = pac::TIM2;
+    let tim2 = peripherals::TIM2::regs_gp32();
 
-    tim2.psc().write(|w| *w = 0);
-    tim2.arr().write(|w| *w = ENCODER_TIM_MAX_VALUE as u32);
-    tim2.cnt().write(|w| *w = ENCODER_TIM_HALF_VALUE as u32);
+    tim2.psc().write(|w| w.set_psc(0));
+    tim2.arr()
+        .write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE as u32));
+    tim2.cnt()
+        .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
     tim2.ccmr_input(0)
         .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
     tim2.ccmr_input(0)
@@ -313,23 +318,27 @@ async fn main(spawner: Spawner) {
     tim2.cr1().modify(|r| r.set_cen(true));
 
     let read_encoder1 = || {
-        let tmp = (tim5.cnt().read() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim5.cnt().write(|w| *w = ENCODER_TIM_HALF_VALUE as u32);
+        let tmp = (tim5.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
+        tim5.cnt()
+            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
         return tmp;
     };
     let read_encoder2 = || {
-        let tmp = (tim3.cnt().read().0 as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim3.cnt().write(|w| *w = stm32_metapac::timer::regs::CntCore(ENCODER_TIM_HALF_VALUE as u32));
+        let tmp = (tim3.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
+        tim3.cnt()
+            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u16));
         return tmp;
     };
     let read_encoder3 = || {
-        let tmp = (tim4.cnt().read().0 as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim4.cnt().write(|w| *w = stm32_metapac::timer::regs::CntCore(ENCODER_TIM_HALF_VALUE as u32));
+        let tmp = (tim4.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
+        tim4.cnt()
+            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u16));
         return tmp;
     };
     let read_encoder4 = || {
-        let tmp = -(tim2.cnt().read() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim2.cnt().write(|w| *w = ENCODER_TIM_HALF_VALUE as u32);
+        let tmp = -(tim2.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
+        tim2.cnt()
+            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
         return tmp;
     };
 
@@ -476,14 +485,14 @@ async fn main(spawner: Spawner) {
 
 #[embassy_executor::task]
 async fn uart_task(
-    usart: Uart<'static, embassy_stm32::mode::Async>,
+    usart: Uart<'static, peripherals::USART3, peripherals::DMA1_CH3, peripherals::DMA1_CH1>,
 ) {
     let (_, uart_rx) = usart.split();
 
     let mut dma_buf = [0u8; 128];
     let mut uart_rx = uart_rx.into_ring_buffered(&mut dma_buf);
 
-    let _ = uart_rx.start_uart();
+    let _ = uart_rx.start();
 
     loop {
         let mut byte = [0u8; 1];
@@ -505,7 +514,7 @@ async fn uart_task(
                     Err(_err) => {
                         // error!("[UART] read error: {:?}, {}", err, c);
 
-                        let _ = uart_rx.start_uart();
+                        let _ = uart_rx.start();
                     }
                 },
                 Err(_) => {
