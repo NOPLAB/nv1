@@ -1040,7 +1040,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nv1-hub-stm32"
+name = "nv1-hub"
 version = "0.1.0"
 dependencies = [
  "bbqueue",

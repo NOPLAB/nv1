@@ -2,7 +2,7 @@ cargo-features = ["per-package-target"]
 
 [package]
 edition = "2021"
-name = "nv1-hub-stm32"
+name = "nv1-hub"
 version = "0.1.0"
 forced-target = "thumbv7em-none-eabi"
 
@@ -49,7 +49,7 @@ rgb = "0.8.50"
 static_cell = "2.1.0"
 
 [[bin]]
-name = "nv1-hub-stm32"
+name = "nv1-hub"
 test = false
 bench = false
 
