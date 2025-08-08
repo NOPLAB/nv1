@@ -17,7 +17,7 @@ pub enum GoalColor {
 pub struct Settings {
     pub line_threshold: f32,
     pub have_ball_threshold: u16,
-    pub opp_goal_color: GoalColor,
+    opp_goal_color: GoalColor,
     pub opencv_goal_blue: HSV,
     pub opencv_goal_yellow: HSV,
     pub robot_speed_multiplier: f32,
@@ -33,6 +33,7 @@ impl Settings {
         opencv_goal_yellow: DEFAULT_OPENCV_GOAL_YELLOW,
     };
 
+    #[allow(dead_code)]
     pub fn get_opp_color(&self) -> HSV {
         match self.opp_goal_color {
             GoalColor::Blue => self.opencv_goal_blue,
@@ -40,6 +41,7 @@ impl Settings {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_own_color(&self) -> HSV {
         match self.opp_goal_color {
             GoalColor::Blue => self.opencv_goal_yellow,
@@ -52,6 +54,10 @@ impl Settings {
             GoalColor::Blue => GoalColor::Yellow,
             GoalColor::Yellow => GoalColor::Blue,
         };
+    }
+
+    pub fn get_opp_goal_color(&self) -> GoalColor {
+        self.opp_goal_color
     }
 }
 

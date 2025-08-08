@@ -43,12 +43,14 @@ pub static G_JETSON_TX: Mutex<CriticalSectionRawMutex, RefCell<nv1_msg::hub::ToJ
         config: nv1_msg::hub::JetsonConfig::None,
     }));
 
+#[allow(dead_code)]
 pub struct CommunicationSystem {
     pub uart_jetson: Uart<'static, mode::Async>,
     pub uart_md: Uart<'static, mode::Async>,
     pub uart_bno: Uart<'static, mode::Async>,
 }
 
+#[allow(dead_code)]
 impl CommunicationSystem {
     pub fn new(
         uart_jetson: Uart<'static, mode::Async>,

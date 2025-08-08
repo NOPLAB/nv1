@@ -34,6 +34,7 @@ pub struct HubUI<'a, T>
 where
     T: DrawTarget<Color = BinaryColor>,
 {
+    #[allow(dead_code)]
     option: HubUIOption,
     display: &'a mut T,
     menu: Vec<Box<dyn Menu<T>>>,

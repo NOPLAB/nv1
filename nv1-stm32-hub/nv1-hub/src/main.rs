@@ -34,12 +34,11 @@ use core::{borrow::Borrow, cell::RefCell};
 use alloc::rc::Rc;
 
 use defmt::error;
+
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::flash::Flash;
-
 use embassy_stm32::mode;
-
 use embassy_stm32::{
     bind_interrupts,
     gpio::Pull,
@@ -48,7 +47,6 @@ use embassy_stm32::{
     usart::{self, Uart},
 };
 use embassy_time::{with_timeout, Duration, Timer};
-
 use neo_pixel::NeoPixelPwm;
 use nv1_hub_ui::Event;
 use ssd1306::mode::BufferedGraphicsMode;
@@ -82,7 +80,7 @@ async fn main(spawner: Spawner) {
 
     // Configure and initialize hardware
     let config = hardware::configure_clocks();
-    let mut p = embassy_stm32::init(config);
+    let p = embassy_stm32::init(config);
 
     let hardware_config = hardware::HardwareConfig::default();
     let uart_pins = hardware::initialize_uarts(
@@ -119,7 +117,7 @@ async fn main(spawner: Spawner) {
             p.ADC1, p.PB12, p.PB13, p.PB14, p.PB15, p.PB0, p.PB1, p.PB4, p.PB5,
         );
 
-    let mut adc_sensor = AdcSensor::new(
+    let adc_sensor = AdcSensor::new(
         adc, line_s0, line_s1, line_s2, line_s3, ir_s0, ir_s1, ir_s2, ir_s3,
     );
 

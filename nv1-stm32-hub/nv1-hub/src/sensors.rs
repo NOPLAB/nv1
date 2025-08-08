@@ -174,6 +174,7 @@ impl AdcSensor {
 }
 
 pub struct SensorReadings {
+    #[allow(dead_code)]
     pub line_vector: Option<Vector2>,
     pub ir_angle: f32,
     pub ir_position: Vector2,
@@ -298,23 +299,6 @@ where
         sum_y / adc.len() as f32 / norm,
         max_adc,
     )
-}
-
-pub fn calculate_line_vec(adc: &[f32], adc_sin: &[f32], adc_cos: &[f32]) -> Option<Vector2> {
-    let mut sum_x: f32 = 0.0;
-    let mut sum_y: f32 = 0.0;
-
-    for i in 0..adc.len() {
-        sum_x = sum_x + adc_cos[i];
-        sum_y = sum_y + adc_sin[i];
-    }
-
-    let norm = libm::sqrtf(libm::powf(sum_x, 2.0) + libm::powf(sum_y, 2.0));
-    if norm == 0.0 {
-        None
-    } else {
-        Some(Vector2::new(sum_x / norm, sum_y / norm))
-    }
 }
 
 pub fn calculate_line_vec_with_threshold(

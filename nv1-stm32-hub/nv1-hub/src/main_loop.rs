@@ -3,8 +3,7 @@ use crate::{
     constants::*,
     motor_controller::MotorController,
     sensors::{calculate_line_vec_with_threshold, AdcSensor},
-    settings::{GoalColor, Settings},
-    types::Vector2,
+    settings::Settings,
 };
 use alloc::rc::Rc;
 use core::cell::RefCell;
@@ -120,15 +119,9 @@ impl MainLoopContext {
                 }
             };
 
-            let opp_color = match settings.opp_goal_color {
-                GoalColor::Blue => settings.opencv_goal_blue,
-                GoalColor::Yellow => settings.opencv_goal_yellow,
-            };
+            let opp_color = settings.get_opp_color();
 
-            let own_color = match settings.opp_goal_color {
-                GoalColor::Blue => settings.opencv_goal_yellow,
-                GoalColor::Yellow => settings.opencv_goal_blue,
-            };
+            let own_color = settings.get_own_color();
 
             let msg_tx = nv1_msg::hub::ToJetson {
                 sys: nv1_msg::hub::System {

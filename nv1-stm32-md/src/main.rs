@@ -16,7 +16,7 @@ static HEAP: Heap = Heap::empty();
 use core::cell::RefCell;
 
 use defmt::error;
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 #[cfg(not(feature = "defmt"))]
 use panic_halt as _;
 
@@ -59,7 +59,7 @@ bind_interrupts!(struct Irqs {
 const MOTOR_ENCODER_PLUS: usize = 3 * 4;
 const MOTOR_GEAR_RATIO: f32 = 1.0 / 19.225;
 
-static G_HUB_MSG: Mutex<ThreadModeRawMutex, RefCell<nv1_msg::md::ToMD>> =
+static G_HUB_MSG: Mutex<CriticalSectionRawMutex, RefCell<nv1_msg::md::ToMD>> =
     Mutex::new(RefCell::new(nv1_msg::md::ToMD {
         enable: false,
         m1: 0.0,
@@ -347,39 +347,40 @@ async fn main(spawner: Spawner) {
     let mut pid3: Pid<f32> = pid::Pid::new(0.0, 100.0);
     let mut pid4: Pid<f32> = pid::Pid::new(0.0, 100.0);
 
-    pid1.p(8.0, 50.0).i(4.0, 50.0).d(0.0, 0.0);
-    pid2.p(8.0, 50.0).i(4.0, 50.0).d(0.0, 0.0);
-    pid3.p(8.0, 50.0).i(4.0, 50.0).d(0.0, 0.0);
-    pid4.p(8.0, 50.0).i(4.0, 50.0).d(0.0, 0.0);
+    pid1.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
+    pid2.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
+    pid3.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
+    pid4.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
 
     // let midi = midly::parse(include_bytes!("../midi.mid")).unwrap();
 
-    info!("[MD] initialized");
+    info!("[MD] Initialized");
 
     loop {
         let msg = G_HUB_MSG.lock().await.borrow().clone();
 
-        if msg.enable {
-            pid1.setpoint(msg.m1);
-            pid2.setpoint(msg.m2);
-            pid3.setpoint(msg.m3);
-            pid4.setpoint(msg.m4);
+        // if msg.enable {
+        if true {
+            // pid1.setpoint(msg.m1);
+            // pid2.setpoint(msg.m2);
+            // pid3.setpoint(msg.m3);
+            // pid4.setpoint(msg.m4);
 
             // PID Tune
-            // pid1.setpoint(5.0);
-            // pid2.setpoint(5.0);
-            // pid3.setpoint(5.0);
-            // pid4.setpoint(5.0);
+            pid1.setpoint(5.0);
+            pid2.setpoint(5.0);
+            pid3.setpoint(5.0);
+            pid4.setpoint(5.0);
 
             let motor1_rps = read_encoder1() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
             let motor2_rps = read_encoder2() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
             let motor3_rps = read_encoder3() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
             let motor4_rps = read_encoder4() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
 
-            // info!(
-            //     "rps: {}, {}, {}, {}",
-            //     motor1_rps, motor2_rps, motor3_rps, motor4_rps
-            // );
+            info!(
+                "rps: {}, {}, {}, {}",
+                motor1_rps, motor2_rps, motor3_rps, motor4_rps
+            );
 
             if motor1_rps.is_nan() {
                 continue;
@@ -405,21 +406,6 @@ async fn main(spawner: Spawner) {
             motors.stop3();
             motors.stop4();
         }
-
-        // info!(
-        //     "output: {}, {}, {}",
-        //     motor1_output.p, motor1_output.i, motor1_output.d
-        // );
-
-        // info!(
-        //     "{}, {}, {}, {}",
-        //     tim5.cnt().read().cnt(),
-        //     tim3.cnt().read().cnt(),
-        //     tim4.cnt().read().cnt(),
-        //     tim2.cnt().read().cnt()
-        // );
-
-        Timer::after_millis(10).await;
 
         // MIDI
         // motors.set_speed1(10);

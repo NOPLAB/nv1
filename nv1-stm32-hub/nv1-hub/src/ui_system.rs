@@ -13,6 +13,7 @@ pub type DisplayType = Ssd1306<
     BufferedGraphicsMode<DisplaySize128x64>,
 >;
 
+#[allow(dead_code)]
 pub struct UISystem {
     pub display: &'static mut DisplayType,
     pub gpio_ui_up: ExtiInput<'static>,
@@ -20,6 +21,7 @@ pub struct UISystem {
     pub gpio_ui_enter: ExtiInput<'static>,
 }
 
+#[allow(dead_code)]
 impl UISystem {
     pub fn new(
         display: &'static mut DisplayType,
@@ -103,7 +105,7 @@ impl UISystem {
             "ATK",
             "",
             move |value| {
-                *value = match settings_clone.as_ref().borrow().opp_goal_color {
+                *value = match settings_clone.as_ref().borrow().get_opp_goal_color() {
                     GoalColor::Blue => "B",
                     GoalColor::Yellow => "Y",
                 }
@@ -117,11 +119,7 @@ impl UISystem {
             "SW Coat",
             move |pressed| {
                 if pressed {
-                    let toggle_color = match settings_clone.as_ref().borrow().opp_goal_color {
-                        GoalColor::Blue => GoalColor::Yellow,
-                        GoalColor::Yellow => GoalColor::Blue,
-                    };
-                    settings_clone.borrow_mut().opp_goal_color = toggle_color;
+                    settings_clone.borrow_mut().toggle_goal_color();
                     {
                         let mut flash_ref = f_clone.borrow_mut();
                         let settings_ref = settings_clone.borrow();

@@ -103,6 +103,7 @@ where
         self.write(dma, colors).await;
     }
 
+    #[allow(dead_code)]
     pub fn set_brightness(&mut self, brightness: u8) {
         if brightness > 45 {
             self.brightness = 45;
