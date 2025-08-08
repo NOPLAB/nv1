@@ -201,64 +201,108 @@ impl LineProcessor {
     ) -> Option<Vector2> {
         match self.state {
             AdcState::OnGround => {
-                if let Some(vector) = line_vector {
-                    let (x, y) = (vector.x, vector.y);
-                    let now_angle = libm::atan2f(y, x);
-                    self.state = AdcState::OnLine(now_angle, x, y, 0);
-                    Some(Vector2::new(-x, -y))
-                } else {
-                    self.state = AdcState::OnGround;
-                    None
-                }
+                self.handle_on_ground_state(line_vector)
             }
             AdcState::OnLine(first_angle, first_x, first_y, counter) => {
-                if let Some(vector) = line_vector {
-                    let (x, y) = (vector.x, vector.y);
-                    let now_angle = libm::atan2f(y, x);
-
-                    if !is_angle_in_range(
-                        now_angle,
-                        first_angle - LINE_OVER_CENTER_THRESHOLD / 2.0,
-                        first_angle + LINE_OVER_CENTER_THRESHOLD / 2.0,
-                    ) {
-                        self.state =
-                            AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, 0);
-                        Some(Vector2::new(-x, -y))
-                    } else {
-                        self.state = AdcState::OnLine(first_angle, first_x, first_y, 0);
-                        Some(Vector2::new(-x, -y))
-                    }
-                } else {
-                    if counter > 100 {
-                        self.state = AdcState::OnGround;
-                        None
-                    } else {
-                        self.state = AdcState::OnLine(first_angle, first_x, first_y, counter + 1);
-                        Some(Vector2::new(-first_x, -first_y))
-                    }
-                }
+                self.handle_on_line_state(line_vector, first_angle, first_x, first_y, counter)
             }
             AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter) => {
-                if line_vector.is_some() {
-                    self.state =
-                        AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter + 1);
-                    Some(Vector2::new(-first_x, -first_y))
-                } else {
-                    if counter > 100 {
-                        self.state = AdcState::OnGround;
-                        None
-                    } else {
-                        self.state = AdcState::OutOfLineOverCenter(
-                            first_angle,
-                            first_x,
-                            first_y,
-                            counter + 1,
-                        );
-                        Some(Vector2::new(-first_x, -first_y))
-                    }
-                }
+                self.handle_out_of_line_over_center_state(
+                    line_vector, first_angle, first_x, first_y, counter
+                )
             }
         }
+    }
+    
+
+    
+    fn handle_on_ground_state(&mut self, line_vector: Option<Vector2>) -> Option<Vector2> {
+        if let Some(detected_vector) = line_vector {
+            // Line detected - transition to OnLine state
+            let detected_angle = detected_vector.angle();
+            
+            self.state = AdcState::OnLine(detected_angle, detected_vector.x, detected_vector.y, 0);
+            Some(-detected_vector) // Return correction vector (opposite direction)
+        } else {
+            // No line detected - stay on ground
+            self.state = AdcState::OnGround;
+            None
+        }
+    }
+    
+    fn handle_on_line_state(
+        &mut self,
+        line_vector: Option<Vector2>,
+        first_angle: f32,
+        first_x: f32,
+        first_y: f32,
+        counter: u32,
+    ) -> Option<Vector2> {
+        const COUNTER_TIMEOUT_LIMIT: u32 = 100;
+        
+        if let Some(current_vector) = line_vector {
+            // Line still detected - check if robot has crossed over center
+            let current_angle = current_vector.angle();
+            
+            let angle_tolerance = LINE_OVER_CENTER_THRESHOLD / 2.0;
+            let min_allowed_angle = first_angle - angle_tolerance;
+            let max_allowed_angle = first_angle + angle_tolerance;
+            
+            if self.is_angle_outside_range(current_angle, min_allowed_angle, max_allowed_angle) {
+                // Robot has crossed over center - transition to OutOfLineOverCenter
+                self.state = AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, 0);
+                Some(-current_vector)
+            } else {
+                // Still on same side of line - reset counter and continue
+                self.state = AdcState::OnLine(first_angle, first_x, first_y, 0);
+                Some(-current_vector)
+            }
+        } else {
+            // Line lost - use timeout counter to decide next state
+            if counter > COUNTER_TIMEOUT_LIMIT {
+                // Timeout exceeded - return to ground
+                self.state = AdcState::OnGround;
+                None
+            } else {
+                // Still within timeout - keep using last known position
+                let last_known_vector = Vector2::new(first_x, first_y);
+                self.state = AdcState::OnLine(first_angle, first_x, first_y, counter + 1);
+                Some(-last_known_vector)
+            }
+        }
+    }
+    
+    fn handle_out_of_line_over_center_state(
+        &mut self,
+        line_vector: Option<Vector2>,
+        first_angle: f32,
+        first_x: f32,
+        first_y: f32,
+        counter: u32,
+    ) -> Option<Vector2> {
+        const COUNTER_TIMEOUT_LIMIT: u32 = 100;
+        let original_vector = Vector2::new(first_x, first_y);
+        
+        if line_vector.is_some() {
+            // Line still detected - increment counter but stay in this state
+            self.state = AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter + 1);
+            Some(-original_vector)
+        } else {
+            // Line lost - use timeout counter to decide next state
+            if counter > COUNTER_TIMEOUT_LIMIT {
+                // Timeout exceeded - return to ground
+                self.state = AdcState::OnGround;
+                None
+            } else {
+                // Still within timeout - keep using original position
+                self.state = AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter + 1);
+                Some(-original_vector)
+            }
+        }
+    }
+    
+    fn is_angle_outside_range(&self, angle: f32, min_angle: f32, max_angle: f32) -> bool {
+        !is_angle_in_range(angle, min_angle, max_angle)
     }
 }
 

@@ -88,3 +88,13 @@ impl core::ops::Div<f32> for Vector2 {
         }
     }
 }
+impl core::ops::Neg for Vector2 {
+    type Output = Vector2;
+
+    fn neg(self) -> Vector2 {
+        Vector2 {
+            x: -self.x,
+            y: -self.y,
+        }
+    }
+}
