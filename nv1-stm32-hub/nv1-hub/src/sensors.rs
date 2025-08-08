@@ -49,7 +49,7 @@ impl AdcSensor {
         ir_s2: Output<'static>,
         ir_s3: Output<'static>,
     ) -> Self {
-        adc.set_sample_time(embassy_stm32::adc::SampleTime::CYCLES3);
+        adc.set_sample_time(embassy_stm32::adc::SampleTime::CYCLES56);
 
         let mut line_sin = [0.0_f32; LINE_SENSORS_COUNT];
         let mut line_cos = [0.0_f32; LINE_SENSORS_COUNT];
