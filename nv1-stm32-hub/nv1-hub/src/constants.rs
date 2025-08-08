@@ -50,3 +50,8 @@ pub const IR_SENSORS_COUNT: usize = 16;
 pub const LINE_SPEED_MULTIPLIER: f32 = 1.5;
 pub const ROTATION_PID_P: f32 = 7.0;
 pub const ROTATION_PID_LIMIT: f32 = 100.0;
+
+pub const WHEEL1_ANGLE: f32 = 45.0;
+pub const WHEEL2_ANGLE: f32 = 315.0;
+pub const WHEEL3_ANGLE: f32 = 225.0;
+pub const WHEEL4_ANGLE: f32 = 135.0;

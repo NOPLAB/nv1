@@ -34,7 +34,6 @@ use alloc::vec::Vec;
 
 use defmt::error;
 use embassy_executor::Spawner;
-use embassy_futures::select::select3;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::flash::Flash;
 use embassy_stm32::gpio::OutputType;
@@ -63,10 +62,10 @@ use nv1_hub_ui::{
     menu::{ListMenu, ListMenuOption},
     Event, HubUI,
 };
-use nv1_hub_ui::{menus, EventKey, HubUIOption};
+use nv1_hub_ui::{menus, HubUIOption};
 use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::prelude::I2CInterface;
-use ssd1306::{mode::DisplayConfig, size::DisplaySize128x64, I2CDisplayInterface, Ssd1306};
+use ssd1306::{size::DisplaySize128x64, I2CDisplayInterface, Ssd1306};
 use static_cell::StaticCell;
 
 #[cfg(not(feature = "defmt"))]
@@ -88,12 +87,13 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // initialize static heap
+    // Initialize static heap
     {
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
     }
 
+    // Configure clocks
     let mut config = embassy_stm32::Config::default();
     {
         use embassy_stm32::rcc;
@@ -118,12 +118,10 @@ async fn main(spawner: Spawner) {
         config.rcc.apb2_pre = rcc::APBPrescaler::DIV2;
     }
 
-    // initialize peripherals
+    // Initialize peripherals
     let mut p = embassy_stm32::init(config);
 
-    info!("Hello, world!");
-
-    // initialize UARTs
+    // Initialize UARTs
     let mut uart_jetson_config = usart::Config::default();
     uart_jetson_config.baudrate = UART_JETSON_BAUDRATE;
     let uart_jetson = Uart::new(
@@ -162,14 +160,15 @@ async fn main(spawner: Spawner) {
         uart_bno_config,
     )
     .unwrap();
-    // reset bno08x
     let mut gpio_reset = Output::new(p.PA0, Level::High, embassy_stm32::gpio::Speed::Low);
+
+    // Reset BNO086
     gpio_reset.set_low();
     Timer::after(Duration::from_millis(10)).await;
     gpio_reset.set_high();
     Timer::after(Duration::from_millis(100)).await;
 
-    // initialize sensor system
+    // Initialize sensor system
     let adc = Adc::new(p.ADC1);
     let line_s0 = Output::new(p.PB12, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
     let line_s1 = Output::new(p.PB13, Level::Low, embassy_stm32::gpio::Speed::VeryHigh);
@@ -185,13 +184,11 @@ async fn main(spawner: Spawner) {
         ir_s0, ir_s1, ir_s2, ir_s3,
     );
 
-    // initialize flash and settings
+    // Initialize flash and settings
     let f = Rc::new(RefCell::new(Flash::new_blocking(p.FLASH)));
     let mut settings_data = flash_read(&mut f.clone().borrow_mut()).unwrap_or(Settings::DEFAULT);
     validate_and_fix_settings(&mut settings_data, &mut f.clone().borrow_mut()).unwrap();
     let settings = Rc::new(RefCell::new(settings_data));
-
-    info!("line strength: {}", settings.as_ref().borrow().line_threshold);
 
     // UI
     let gpio_ui_toggle = ExtiInput::new(p.PC12, p.EXTI12, Pull::None);
@@ -225,18 +222,7 @@ async fn main(spawner: Spawner) {
         BufferedGraphicsMode<DisplaySize128x64>,
     > = SSD1306.init(ssd1306);
 
-    let mut ssd1306_init_success = false;
-    for _ in 0..10 {
-        match ssd1306.init() {
-            Ok(_) => {
-                ssd1306_init_success = true;
-                break;
-            }
-            Err(_) => {
-                error!("Can't initialize ssd1306");
-            }
-        }
-    }
+    let mut ssd1306_init_success = UISystem::try_initialize_display(ssd1306);
 
     // Create UI values using the UI system
     let (shutdown, reboot, value_line, value_have_ball) = UISystem::create_ui_and_values();
@@ -264,7 +250,7 @@ async fn main(spawner: Spawner) {
 
     let settings_clone = settings.clone();
     let ui_value_coat = Value::new(
-        "ATK2",
+        "ATK",
         "",
         move |value| {
             *value = match settings_clone.as_ref().borrow().opp_goal_color {
@@ -340,7 +326,7 @@ async fn main(spawner: Spawner) {
         embedded_graphics::mono_font::ascii::FONT_6X10,
     );
 
-    let ui_text_speed_mul = Text::new("Speed Mul", embedded_graphics::mono_font::ascii::FONT_6X10);
+    let ui_text_speed_mul = Text::new("Speed", embedded_graphics::mono_font::ascii::FONT_6X10);
 
     let settings_clone = settings.clone();
     let f_clone = f.clone();
@@ -435,15 +421,12 @@ async fn main(spawner: Spawner) {
     static NEO_PIXEL_DMA: StaticCell<peripherals::DMA1_CH0> = StaticCell::new();
     let neo_pixel_dma: &'static mut peripherals::DMA1_CH0 = NEO_PIXEL_DMA.init(p.DMA1_CH0);
 
-    let mut rotation_pid: pid::Pid<f32> = pid::Pid::new(0.0, 100.0);
-    rotation_pid.p(7.0, 100.0);
-
-    const WHEEL_R: f32 = 25.0 / 1000.0;
-    const THREAD: f32 = 108.0 / 1000.0;
-    let wheel_calc1 = omni::OmniWheel::new(45.0_f32.to_radians(), WHEEL_R, THREAD);
-    let wheel_calc2 = omni::OmniWheel::new(315.0_f32.to_radians(), WHEEL_R, THREAD);
-    let wheel_calc3 = omni::OmniWheel::new(225.0_f32.to_radians(), WHEEL_R, THREAD);
-    let wheel_calc4 = omni::OmniWheel::new(135.0_f32.to_radians(), WHEEL_R, THREAD);
+    let mut rotation_pid: pid::Pid<f32> = pid::Pid::new(0.0, ROTATION_PID_LIMIT);
+    rotation_pid.p(ROTATION_PID_P, ROTATION_PID_LIMIT);
+    let wheel_calc1 = omni::OmniWheel::new(WHEEL1_ANGLE.to_radians(), WHEEL_R, THREAD);
+    let wheel_calc2 = omni::OmniWheel::new(WHEEL2_ANGLE.to_radians(), WHEEL_R, THREAD);
+    let wheel_calc3 = omni::OmniWheel::new(WHEEL3_ANGLE.to_radians(), WHEEL_R, THREAD);
+    let wheel_calc4 = omni::OmniWheel::new(WHEEL4_ANGLE.to_radians(), WHEEL_R, THREAD);
 
     enum AdcState {
         OnGround,
@@ -458,17 +441,17 @@ async fn main(spawner: Spawner) {
     
     // Spawn UI task if display initialized successfully
     if ssd1306_init_success {
-        spawner.must_spawn(ui_task(ui, gpio_ui_up, gpio_ui_down, gpio_ui_enter));
+        spawner.must_spawn(ui_system::ui_task(ui, gpio_ui_up, gpio_ui_down, gpio_ui_enter));
     }
     
     // Spawn NeoPixel task
     spawner.must_spawn(neo_pixel::neo_pixel_task(neo_pixel, neo_pixel_dma));
 
-    info!("[nv1-hub] initialized");
-
     let mut line_processor = LineProcessor::new();
     let mut prev_time = Instant::now();
-    
+
+    info!("[nv1-hub] Initialized");
+
     loop {
         let settings = settings.as_ref().borrow().clone();
         let yaw = G_YAW.lock().await.clone().take();
@@ -704,43 +687,6 @@ async fn uart_jetson_task(uart: Uart<'static, mode::Async>) {
         }
 
         Timer::after(Duration::from_millis(2)).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn ui_task(
-    mut ui: HubUI<
-        'static,
-        Ssd1306<
-            I2CInterface<I2c<'static, mode::Blocking>>,
-            DisplaySize128x64,
-            BufferedGraphicsMode<DisplaySize128x64>,
-        >,
-    >,
-    mut gpio_ui_up: ExtiInput<'static>,
-    mut gpio_ui_down: ExtiInput<'static>,
-    mut gpio_ui_enter: ExtiInput<'static>,
-) {
-    loop {
-        select3(
-            gpio_ui_up.wait_for_any_edge(),
-            gpio_ui_down.wait_for_any_edge(),
-            gpio_ui_enter.wait_for_any_edge(),
-        )
-        .await;
-
-        let event = if gpio_ui_up.is_high() {
-            Event::KeyDown(EventKey::Up)
-        } else if gpio_ui_down.is_high() {
-            Event::KeyDown(EventKey::Down)
-        } else if gpio_ui_enter.is_high() {
-            Event::KeyDown(EventKey::Enter)
-        } else {
-            Event::None
-        };
-
-        let display = ui.update(&event);
-        let _ = display.flush();
     }
 }
 
