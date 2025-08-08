@@ -5,6 +5,7 @@ use embassy_stm32::peripherals;
 use num_traits::{AsPrimitive, Num};
 
 use crate::constants::*;
+use crate::types::Vector2;
 
 pub enum AdcState {
     OnGround,
@@ -12,23 +13,31 @@ pub enum AdcState {
     OutOfLineOverCenter(f32, f32, f32, u32),
 }
 
-pub struct SensorSystem {
+pub struct AdcSensor {
     pub adc: Adc<'static, peripherals::ADC1>,
-    pub line_s0: Output<'static>,
-    pub line_s1: Output<'static>,
-    pub line_s2: Output<'static>,
-    pub line_s3: Output<'static>,
-    pub ir_s0: Output<'static>,
-    pub ir_s1: Output<'static>,
-    pub ir_s2: Output<'static>,
-    pub ir_s3: Output<'static>,
-    pub adc_line_sin: [f32; LINE_SENSORS_COUNT],
-    pub adc_line_cos: [f32; LINE_SENSORS_COUNT],
-    pub adc_ir_sin: [f32; IR_SENSORS_COUNT],
-    pub adc_ir_cos: [f32; IR_SENSORS_COUNT],
+    pub line_sensor: LineSensor,
+    pub ir_ball_sensor: IrBallSensor,
 }
 
-impl SensorSystem {
+pub struct LineSensor {
+    pub s0: Output<'static>,
+    pub s1: Output<'static>,
+    pub s2: Output<'static>,
+    pub s3: Output<'static>,
+    pub sin_values: [f32; LINE_SENSORS_COUNT],
+    pub cos_values: [f32; LINE_SENSORS_COUNT],
+}
+
+pub struct IrBallSensor {
+    pub s0: Output<'static>,
+    pub s1: Output<'static>,
+    pub s2: Output<'static>,
+    pub s3: Output<'static>,
+    pub sin_values: [f32; IR_SENSORS_COUNT],
+    pub cos_values: [f32; IR_SENSORS_COUNT],
+}
+
+impl AdcSensor {
     pub fn new(
         mut adc: Adc<'static, peripherals::ADC1>,
         line_s0: Output<'static>,
@@ -42,40 +51,48 @@ impl SensorSystem {
     ) -> Self {
         adc.set_sample_time(embassy_stm32::adc::SampleTime::CYCLES3);
 
-        let mut adc_line_sin = [0.0_f32; LINE_SENSORS_COUNT];
-        let mut adc_line_cos = [0.0_f32; LINE_SENSORS_COUNT];
+        let mut line_sin = [0.0_f32; LINE_SENSORS_COUNT];
+        let mut line_cos = [0.0_f32; LINE_SENSORS_COUNT];
         generate_adc_vec(
-            &mut adc_line_sin,
-            &mut adc_line_cos,
+            &mut line_sin,
+            &mut line_cos,
             90.0_f32.to_radians(),
             -(360.0_f32 / LINE_SENSORS_COUNT as f32).to_radians(),
             1.0,
         );
 
-        let mut adc_ir_sin = [0.0_f32; IR_SENSORS_COUNT];
-        let mut adc_ir_cos = [0.0_f32; IR_SENSORS_COUNT];
+        let mut ir_sin = [0.0_f32; IR_SENSORS_COUNT];
+        let mut ir_cos = [0.0_f32; IR_SENSORS_COUNT];
         generate_adc_vec(
-            &mut adc_ir_sin,
-            &mut adc_ir_cos,
+            &mut ir_sin,
+            &mut ir_cos,
             90_f32.to_radians(),
             -(360.0_f32 / IR_SENSORS_COUNT as f32).to_radians(),
             1.0,
         );
 
+        let line_sensor = LineSensor {
+            s0: line_s0,
+            s1: line_s1,
+            s2: line_s2,
+            s3: line_s3,
+            sin_values: line_sin,
+            cos_values: line_cos,
+        };
+
+        let ir_ball_sensor = IrBallSensor {
+            s0: ir_s0,
+            s1: ir_s1,
+            s2: ir_s2,
+            s3: ir_s3,
+            sin_values: ir_sin,
+            cos_values: ir_cos,
+        };
+
         Self {
             adc,
-            line_s0,
-            line_s1,
-            line_s2,
-            line_s3,
-            ir_s0,
-            ir_s1,
-            ir_s2,
-            ir_s3,
-            adc_line_sin,
-            adc_line_cos,
-            adc_ir_sin,
-            adc_ir_cos,
+            line_sensor,
+            ir_ball_sensor,
         }
     }
 
@@ -111,21 +128,24 @@ impl SensorSystem {
 
         let line_vector = calculate_line_vec_with_threshold(
             &adc_line,
-            &self.adc_line_sin,
-            &self.adc_line_cos,
+            &self.line_sensor.sin_values,
+            &self.line_sensor.cos_values,
             0.1, // Default threshold - will be overridden by caller
         );
 
-        let (ir_x, ir_y, _ir_strength) =
-            calculate_adc_vec(&adc_ir, &self.adc_ir_sin, &self.adc_ir_cos, 1.0);
+        let (ir_x, ir_y, _ir_strength) = calculate_adc_vec(
+            &adc_ir,
+            &self.ir_ball_sensor.sin_values,
+            &self.ir_ball_sensor.cos_values,
+            1.0,
+        );
         let ir_angle = libm::atan2f(ir_y, ir_x);
         let adc_line_max = adc_line.iter().cloned().reduce(f32::max).unwrap_or(0.0);
 
         SensorReadings {
             line_vector,
             ir_angle,
-            ir_x,
-            ir_y,
+            ir_position: Vector2::new(ir_x, ir_y),
             adc_have_ball,
             adc_line_max,
             adc_line,
@@ -141,23 +161,22 @@ impl SensorSystem {
             }
         };
 
-        set_pin_state(&mut self.line_s0, 0b0001);
-        set_pin_state(&mut self.line_s1, 0b0010);
-        set_pin_state(&mut self.line_s2, 0b0100);
-        set_pin_state(&mut self.line_s3, 0b1000);
+        set_pin_state(&mut self.line_sensor.s0, 0b0001);
+        set_pin_state(&mut self.line_sensor.s1, 0b0010);
+        set_pin_state(&mut self.line_sensor.s2, 0b0100);
+        set_pin_state(&mut self.line_sensor.s3, 0b1000);
 
-        set_pin_state(&mut self.ir_s0, 0b0001);
-        set_pin_state(&mut self.ir_s1, 0b0010);
-        set_pin_state(&mut self.ir_s2, 0b0100);
-        set_pin_state(&mut self.ir_s3, 0b1000);
+        set_pin_state(&mut self.ir_ball_sensor.s0, 0b0001);
+        set_pin_state(&mut self.ir_ball_sensor.s1, 0b0010);
+        set_pin_state(&mut self.ir_ball_sensor.s2, 0b0100);
+        set_pin_state(&mut self.ir_ball_sensor.s3, 0b1000);
     }
 }
 
 pub struct SensorReadings {
-    pub line_vector: Option<(f32, f32)>,
+    pub line_vector: Option<Vector2>,
     pub ir_angle: f32,
-    pub ir_x: f32,
-    pub ir_y: f32,
+    pub ir_position: Vector2,
     pub adc_have_ball: u16,
     pub adc_line_max: f32,
     pub adc_line: alloc::vec::Vec<f32>,
@@ -176,22 +195,24 @@ impl LineProcessor {
 
     pub fn process_line(
         &mut self,
-        line_vector: Option<(f32, f32)>,
+        line_vector: Option<Vector2>,
         _threshold: f32,
-    ) -> Option<(f32, f32)> {
+    ) -> Option<Vector2> {
         match self.state {
             AdcState::OnGround => {
-                if let Some((x, y)) = line_vector {
+                if let Some(vector) = line_vector {
+                    let (x, y) = (vector.x, vector.y);
                     let now_angle = libm::atan2f(y, x);
                     self.state = AdcState::OnLine(now_angle, x, y, 0);
-                    Some((-x, -y))
+                    Some(Vector2::new(-x, -y))
                 } else {
                     self.state = AdcState::OnGround;
                     None
                 }
             }
             AdcState::OnLine(first_angle, first_x, first_y, counter) => {
-                if let Some((x, y)) = line_vector {
+                if let Some(vector) = line_vector {
+                    let (x, y) = (vector.x, vector.y);
                     let now_angle = libm::atan2f(y, x);
 
                     if !is_angle_in_range(
@@ -201,10 +222,10 @@ impl LineProcessor {
                     ) {
                         self.state =
                             AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, 0);
-                        Some((-x, -y))
+                        Some(Vector2::new(-x, -y))
                     } else {
                         self.state = AdcState::OnLine(first_angle, first_x, first_y, 0);
-                        Some((-x, -y))
+                        Some(Vector2::new(-x, -y))
                     }
                 } else {
                     if counter > 100 {
@@ -212,7 +233,7 @@ impl LineProcessor {
                         None
                     } else {
                         self.state = AdcState::OnLine(first_angle, first_x, first_y, counter + 1);
-                        Some((-first_x, -first_y))
+                        Some(Vector2::new(-first_x, -first_y))
                     }
                 }
             }
@@ -220,7 +241,7 @@ impl LineProcessor {
                 if line_vector.is_some() {
                     self.state =
                         AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter + 1);
-                    Some((-first_x, -first_y))
+                    Some(Vector2::new(-first_x, -first_y))
                 } else {
                     if counter > 100 {
                         self.state = AdcState::OnGround;
@@ -232,7 +253,7 @@ impl LineProcessor {
                             first_y,
                             counter + 1,
                         );
-                        Some((-first_x, -first_y))
+                        Some(Vector2::new(-first_x, -first_y))
                     }
                 }
             }
@@ -279,7 +300,7 @@ where
     )
 }
 
-pub fn calculate_line_vec(adc: &[f32], adc_sin: &[f32], adc_cos: &[f32]) -> Option<(f32, f32)> {
+pub fn calculate_line_vec(adc: &[f32], adc_sin: &[f32], adc_cos: &[f32]) -> Option<Vector2> {
     let mut sum_x: f32 = 0.0;
     let mut sum_y: f32 = 0.0;
 
@@ -292,7 +313,7 @@ pub fn calculate_line_vec(adc: &[f32], adc_sin: &[f32], adc_cos: &[f32]) -> Opti
     if norm == 0.0 {
         None
     } else {
-        Some((sum_x / norm, sum_y / norm))
+        Some(Vector2::new(sum_x / norm, sum_y / norm))
     }
 }
 
@@ -301,7 +322,7 @@ pub fn calculate_line_vec_with_threshold(
     adc_sin: &[f32],
     adc_cos: &[f32],
     threshold: f32,
-) -> Option<(f32, f32)> {
+) -> Option<Vector2> {
     let mut sum_x: f32 = 0.0;
     let mut sum_y: f32 = 0.0;
     let mut over_threshold = false;
@@ -319,7 +340,7 @@ pub fn calculate_line_vec_with_threshold(
     }
 
     let norm = libm::sqrtf(libm::powf(sum_x, 2.0) + libm::powf(sum_y, 2.0));
-    Some((sum_x / norm, sum_y / norm))
+    Some(Vector2::new(sum_x / norm, sum_y / norm))
 }
 
 pub fn is_angle_in_range(angle: f32, a: f32, b: f32) -> bool {

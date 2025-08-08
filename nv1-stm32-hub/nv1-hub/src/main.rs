@@ -12,6 +12,7 @@ mod neo_pixel;
 mod omni;
 mod sensors;
 mod settings;
+mod types;
 mod ui_system;
 
 extern crate alloc;
@@ -118,7 +119,7 @@ async fn main(spawner: Spawner) {
             p.ADC1, p.PB12, p.PB13, p.PB14, p.PB15, p.PB0, p.PB1, p.PB4, p.PB5,
         );
 
-    let mut sensor_system = SensorSystem::new(
+    let mut adc_sensor = AdcSensor::new(
         adc, line_s0, line_s1, line_s2, line_s3, ir_s0, ir_s1, ir_s2, ir_s3,
     );
 
@@ -206,11 +207,7 @@ async fn main(spawner: Spawner) {
     );
 
     main_loop_context
-        .run_main_loop(
-            sensor_system,
-            uart_pins.uart_md,
-            (p.PC0, p.PC1, p.PC2, p.PC3),
-        )
+        .run_main_loop(adc_sensor, uart_pins.uart_md, (p.PC0, p.PC1, p.PC2, p.PC3))
         .await;
 }
 

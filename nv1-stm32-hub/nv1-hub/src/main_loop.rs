@@ -2,8 +2,9 @@ use crate::{
     communication::{G_JETSON_RX, G_JETSON_TX, G_NEO_PIXEL_DATA, G_YAW},
     constants::*,
     motor_controller::MotorController,
-    sensors::{calculate_line_vec_with_threshold, SensorSystem},
+    sensors::{calculate_line_vec_with_threshold, AdcSensor},
     settings::{GoalColor, Settings},
+    types::Vector2,
 };
 use alloc::rc::Rc;
 use core::cell::RefCell;
@@ -40,7 +41,7 @@ impl MainLoopContext {
 
     pub async fn run_main_loop(
         &mut self,
-        mut sensor_system: SensorSystem,
+        mut adc_sensor: AdcSensor,
         mut uart_md: Uart<'static, embassy_stm32::mode::Async>,
         mut adc_pins: (
             peripherals::PC0,
@@ -51,13 +52,13 @@ impl MainLoopContext {
     ) -> ! {
         let mut prev_time = Instant::now();
 
-        info!("[nv1-hub] Initialized");
+        info!("[nv1-hub] Start main loop...");
 
         loop {
             let settings = self.settings.as_ref().borrow().clone();
             let yaw = G_YAW.lock().await.clone().take();
 
-            let sensor_readings = sensor_system.read_sensors(
+            let sensor_readings = adc_sensor.read_sensors(
                 &mut adc_pins.0,
                 &mut adc_pins.1,
                 &mut adc_pins.2,
@@ -66,8 +67,8 @@ impl MainLoopContext {
 
             let on_line = calculate_line_vec_with_threshold(
                 &sensor_readings.adc_line,
-                &sensor_system.adc_line_sin,
-                &sensor_system.adc_line_cos,
+                &adc_sensor.line_sensor.sin_values,
+                &adc_sensor.line_sensor.cos_values,
                 settings.line_threshold,
             );
 
@@ -76,10 +77,10 @@ impl MainLoopContext {
                 .process_line(on_line, settings.line_threshold);
 
             let received_msg = G_JETSON_RX.lock().await.clone();
-            let (vel_x, vel_y) = if let Some((line_x, line_y)) = calc_line {
+            let (vel_x, vel_y) = if let Some(line_vector) = calc_line {
                 (
-                    line_x * LINE_SPEED_MULTIPLIER,
-                    line_y * LINE_SPEED_MULTIPLIER,
+                    line_vector.x * LINE_SPEED_MULTIPLIER,
+                    line_vector.y * LINE_SPEED_MULTIPLIER,
                 )
             } else {
                 (
@@ -115,7 +116,7 @@ impl MainLoopContext {
             match uart_md.write(&md_data).await {
                 Ok(_) => {}
                 Err(err) => {
-                    defmt::error!("[UART MD] write error: {:?}", err);
+                    defmt::error!("[nv1-hub] UART MD Write error: {:?}", err);
                 }
             };
 
@@ -142,8 +143,8 @@ impl MainLoopContext {
                 },
                 sensor: nv1_msg::hub::Sensor {
                     ir: nv1_msg::hub::Ir {
-                        x: sensor_readings.ir_x,
-                        y: sensor_readings.ir_y,
+                        x: sensor_readings.ir_position.x,
+                        y: sensor_readings.ir_position.y,
                         strength: 0.0,
                     },
                     on_line: on_line.is_some(),

@@ -1,4 +1,4 @@
-use crate::{constants::*, omni::OmniWheel, sensors::LineProcessor};
+use crate::{constants::*, omni::OmniWheel, sensors::LineProcessor, types::Vector2};
 use core::f32::consts::PI;
 use pid;
 
@@ -53,9 +53,9 @@ impl MotorController {
 
     pub fn process_line(
         &mut self,
-        on_line: Option<(f32, f32)>,
+        on_line: Option<Vector2>,
         line_threshold: f32,
-    ) -> Option<(f32, f32)> {
+    ) -> Option<Vector2> {
         self.line_processor.process_line(on_line, line_threshold)
     }
 }
