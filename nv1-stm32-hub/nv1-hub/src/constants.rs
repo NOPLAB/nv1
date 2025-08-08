@@ -32,8 +32,7 @@ pub const DEFAULT_OPENCV_GOAL_YELLOW: HSV = HSV {
 };
 
 pub const SPREAD_PATTERN: [usize; 32] = [
-    0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 4, 4, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0,
-    0, 0,
+    0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 4, 4, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, 0, 0,
 ];
 
 pub const FLASH_SETTINGS_ADDRESS: u32 = 0x6_0000;

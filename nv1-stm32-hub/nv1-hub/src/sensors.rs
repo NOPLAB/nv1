@@ -116,7 +116,8 @@ impl SensorSystem {
             0.1, // Default threshold - will be overridden by caller
         );
 
-        let (ir_x, ir_y, _ir_strength) = calculate_adc_vec(&adc_ir, &self.adc_ir_sin, &self.adc_ir_cos, 1.0);
+        let (ir_x, ir_y, _ir_strength) =
+            calculate_adc_vec(&adc_ir, &self.adc_ir_sin, &self.adc_ir_cos, 1.0);
         let ir_angle = libm::atan2f(ir_y, ir_x);
         let adc_line_max = adc_line.iter().cloned().reduce(f32::max).unwrap_or(0.0);
 
@@ -173,7 +174,11 @@ impl LineProcessor {
         }
     }
 
-    pub fn process_line(&mut self, line_vector: Option<(f32, f32)>, _threshold: f32) -> Option<(f32, f32)> {
+    pub fn process_line(
+        &mut self,
+        line_vector: Option<(f32, f32)>,
+        _threshold: f32,
+    ) -> Option<(f32, f32)> {
         match self.state {
             AdcState::OnGround => {
                 if let Some((x, y)) = line_vector {
@@ -194,7 +199,8 @@ impl LineProcessor {
                         first_angle - LINE_OVER_CENTER_THRESHOLD / 2.0,
                         first_angle + LINE_OVER_CENTER_THRESHOLD / 2.0,
                     ) {
-                        self.state = AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, 0);
+                        self.state =
+                            AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, 0);
                         Some((-x, -y))
                     } else {
                         self.state = AdcState::OnLine(first_angle, first_x, first_y, 0);
@@ -212,7 +218,8 @@ impl LineProcessor {
             }
             AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter) => {
                 if line_vector.is_some() {
-                    self.state = AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter + 1);
+                    self.state =
+                        AdcState::OutOfLineOverCenter(first_angle, first_x, first_y, counter + 1);
                     Some((-first_x, -first_y))
                 } else {
                     if counter > 100 {
@@ -272,11 +279,7 @@ where
     )
 }
 
-pub fn calculate_line_vec(
-    adc: &[f32],
-    adc_sin: &[f32],
-    adc_cos: &[f32],
-) -> Option<(f32, f32)> {
+pub fn calculate_line_vec(adc: &[f32], adc_sin: &[f32], adc_cos: &[f32]) -> Option<(f32, f32)> {
     let mut sum_x: f32 = 0.0;
     let mut sum_y: f32 = 0.0;
 

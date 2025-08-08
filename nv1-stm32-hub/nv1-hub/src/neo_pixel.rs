@@ -1,11 +1,11 @@
+use core::f32::consts::PI;
 use embassy_stm32::{
+    peripherals,
     time::Hertz,
     timer::{simple_pwm::SimplePwm, Ch1Dma, GeneralInstance4Channel},
-    peripherals,
 };
 use embassy_time::{Duration, Timer};
 use rgb::RGB8;
-use core::f32::consts::PI;
 
 use crate::constants::{LED_COUNT, SPREAD_PATTERN};
 

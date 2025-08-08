@@ -313,5 +313,5 @@ where
         Ok(())
     }
 
-    fn event(&mut self, event: &crate::Event) {}
+    fn event(&mut self, _event: &crate::Event) {}
 }

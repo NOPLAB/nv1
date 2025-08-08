@@ -18,12 +18,12 @@ static G_REBOOT: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
 
 #[cfg(not(target_os = "none"))]
 fn main() -> anyhow::Result<()> {
-    use std::sync::Mutex;
+    use core::cell::RefCell;
     use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
     use embedded_graphics_simulator::{
         sdl2::Keycode, BinaryColorTheme, OutputSettingsBuilder, SimulatorDisplay, SimulatorEvent,
         Window,
-    };use core::cell::RefCell;
+    };
     use nv1_hub_ui::menu::Menu;
     use nv1_hub_ui::menu::RobotStatusMenu;
     use nv1_hub_ui::menu::RobotStatusMenuOption;
@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
         menu::{ListMenu, ListMenuOption},
         Event, EventKey, HubUI, HubUIOption,
     };
+    use std::sync::Mutex;
 
     println!("Hello, world!");
 

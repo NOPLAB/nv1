@@ -1,17 +1,14 @@
-use core::cell::RefCell;
-use core::borrow::Borrow;
-use embassy_stm32::{
-    mode,
-    usart::Uart,
-};
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
-use embassy_time::{with_timeout, Duration, Timer};
-use defmt::error;
 use bbqueue::BBBuffer;
+use core::borrow::Borrow;
+use core::cell::RefCell;
+use defmt::error;
+use embassy_stm32::{mode, usart::Uart};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_time::{with_timeout, Duration, Timer};
 
 pub static G_BB: BBBuffer<{ bno08x_rvc::BUFFER_SIZE }> = BBBuffer::new();
-pub static G_YAW: Mutex<ThreadModeRawMutex, RefCell<f32>> = Mutex::new(RefCell::new(0.0));
-pub static G_JETSON_RX: Mutex<ThreadModeRawMutex, RefCell<nv1_msg::hub::ToHub>> =
+pub static G_YAW: Mutex<CriticalSectionRawMutex, RefCell<f32>> = Mutex::new(RefCell::new(0.0));
+pub static G_JETSON_RX: Mutex<CriticalSectionRawMutex, RefCell<nv1_msg::hub::ToHub>> =
     Mutex::new(RefCell::new(nv1_msg::hub::ToHub {
         vel: nv1_msg::hub::Movement {
             x: 0.0,
@@ -22,7 +19,7 @@ pub static G_JETSON_RX: Mutex<ThreadModeRawMutex, RefCell<nv1_msg::hub::ToHub>> 
         goal_opp: None,
         goal_own: None,
     }));
-pub static G_JETSON_TX: Mutex<ThreadModeRawMutex, RefCell<nv1_msg::hub::ToJetson>> =
+pub static G_JETSON_TX: Mutex<CriticalSectionRawMutex, RefCell<nv1_msg::hub::ToJetson>> =
     Mutex::new(RefCell::new(nv1_msg::hub::ToJetson {
         sys: nv1_msg::hub::System {
             pause: false,
@@ -68,10 +65,13 @@ impl CommunicationSystem {
     // This method is not used in the current implementation
     // Tasks are spawned directly in main.rs
 
-    pub async fn send_md_message(&mut self, msg: &nv1_msg::md::ToMD) -> Result<(), embassy_stm32::usart::Error> {
+    pub async fn send_md_message(
+        &mut self,
+        msg: &nv1_msg::md::ToMD,
+    ) -> Result<(), embassy_stm32::usart::Error> {
         let md_data = postcard::to_vec_cobs::<nv1_msg::md::ToMD, 64>(msg)
             .map_err(|_| embassy_stm32::usart::Error::Framing)?;
-        
+
         match self.uart_md.write(&md_data).await {
             Ok(_) => Ok(()),
             Err(err) => {
@@ -191,10 +191,19 @@ pub async fn uart_jetson_task(uart: Uart<'static, mode::Async>) {
     }
 }
 
+pub async fn send_system_command(shutdown: bool, reboot: bool) {
+    let jetson_tx = G_JETSON_TX.lock().await;
+    let mut msg = jetson_tx.take();
+    msg.sys.shutdown = shutdown;
+    msg.sys.reboot = reboot;
+    jetson_tx.replace(msg);
+}
+
 use crate::neo_pixel::NeoPixelData;
 
-pub static G_NEO_PIXEL_DATA: Mutex<ThreadModeRawMutex, NeoPixelData> = Mutex::new(NeoPixelData {
-    jetson_connecting: false,
-    pause: false,
-    ball_dir: 0.0,
-});
+pub static G_NEO_PIXEL_DATA: Mutex<CriticalSectionRawMutex, NeoPixelData> =
+    Mutex::new(NeoPixelData {
+        jetson_connecting: false,
+        pause: false,
+        ball_dir: 0.0,
+    });
