@@ -39,8 +39,7 @@ impl EncoderTracker {
         } else {
             raw_delta
         };
-        signed as f32 / self.config.counts_per_motor_rev as f32 * self.config.gear_ratio
-            / period_s
+        signed as f32 / self.config.counts_per_motor_rev as f32 * self.config.gear_ratio / period_s
     }
 }
 

@@ -48,12 +48,12 @@ use embassy_stm32::{
     peripherals,
     usart::{self, Uart},
 };
-use embassy_time::{Duration, Timer, with_timeout};
+use embassy_time::{with_timeout, Duration, Timer};
 use neo_pixel::NeoPixelPwm;
 use nv1_hub_ui::Event;
 use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::prelude::I2CInterface;
-use ssd1306::{I2CDisplayInterface, Ssd1306, size::DisplaySize128x64};
+use ssd1306::{size::DisplaySize128x64, I2CDisplayInterface, Ssd1306};
 use static_cell::StaticCell;
 
 #[cfg(not(feature = "defmt"))]

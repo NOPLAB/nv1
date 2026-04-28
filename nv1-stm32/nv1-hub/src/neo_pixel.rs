@@ -3,7 +3,7 @@ use embassy_stm32::Peri;
 use embassy_stm32::{
     peripherals,
     time::Hertz,
-    timer::{Ch1, Channel, Dma as TimerDma, GeneralInstance4Channel, simple_pwm::SimplePwm},
+    timer::{simple_pwm::SimplePwm, Ch1, Channel, Dma as TimerDma, GeneralInstance4Channel},
 };
 use embassy_time::{Duration, Timer};
 use rgb::RGB8;
@@ -47,15 +47,12 @@ where
         }
     }
 
-    async fn write<D: TimerDma<T, Ch1>>(
-        &mut self,
-        dma: &mut Peri<'static, D>,
-        colors: &mut [RGB8],
-    ) where
+    async fn write<D: TimerDma<T, Ch1>>(&mut self, dma: &mut Peri<'static, D>, colors: &mut [RGB8])
+    where
         crate::Irqs: embassy_stm32::interrupt::typelevel::Binding<
-                D::Interrupt,
-                embassy_stm32::dma::InterruptHandler<D>,
-            >,
+            D::Interrupt,
+            embassy_stm32::dma::InterruptHandler<D>,
+        >,
     {
         use crate::Irqs;
 
@@ -105,9 +102,9 @@ where
         colors: &mut [RGB8],
     ) where
         crate::Irqs: embassy_stm32::interrupt::typelevel::Binding<
-                D::Interrupt,
-                embassy_stm32::dma::InterruptHandler<D>,
-            >,
+            D::Interrupt,
+            embassy_stm32::dma::InterruptHandler<D>,
+        >,
     {
         let angle = 90.0 - self.brightness as f32;
         let angle = angle * core::f32::consts::PI / 180.0;

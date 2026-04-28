@@ -6,21 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NV1 is an embedded robotics system written in Rust with multiple components:
 
-- **nv1-stm32-md**: Motor driver firmware for STM32F446RE controlling 4 motors with PID feedback
-- **nv1-stm32-hub**: Hub firmware workspace (UI, tester, core hub modules)
-- **nv1-msg**: Shared message protocol library for inter-component communication  
+- **nv1-stm32**: STM32 firmware workspace (motor driver, hub, hub UI, UI tester, md core)
+- **nv1-msg**: Shared message protocol library for inter-component communication
 - **nv1-ros**: ROS2 integration modules (communicator, ONNX, OpenCV)
 
 ## Essential Commands
 
 ### Building and Flashing STM32 Components
 ```bash
-# Motor driver
-cd nv1-stm32-md && cargo run --release
+# All STM32 firmware lives in the nv1-stm32 workspace (default target: thumbv7em-none-eabi)
+cd nv1-stm32 && cargo run -p nv1-md --release
+cd nv1-stm32 && cargo run -p nv1-hub --release
 
-# Hub firmware
-cd nv1-stm32-hub && cargo run -p nv1-hub --release
-cd nv1-stm32-hub && cargo run -p nv1-hub-ui --release
+# Host-side UI tester (override the workspace default thumb target)
+cd nv1-stm32 && cargo run -p nv1-hub-ui-tester --target x86_64-pc-windows-msvc
+
+# md-core unit tests (host)
+cd nv1-stm32 && cargo test -p nv1-md-core --target x86_64-pc-windows-msvc
 
 # Message library
 cd nv1-msg && cargo build && cargo test
@@ -56,13 +58,14 @@ cargo check --all      # Compilation check
 
 ### Project Structure
 ```
-nv1-stm32-md/     # Motor driver (single package)
-nv1-stm32-hub/    # Hub firmware (workspace)
-├── nv1-hub/      # Core hub
-├── nv1-hub-ui/   # User interface  
-└── nv1-hub-ui-tester/  # UI testing
-nv1-msg/          # Message protocol
-nv1-ros/          # ROS integration (workspace)
+nv1-stm32/             # STM32 firmware workspace
+├── nv1-md/            # Motor driver (binary, thumb)
+├── nv1-md-core/       # Motor driver pure logic (no_std lib, host-testable)
+├── nv1-hub/           # Hub firmware (binary, thumb)
+├── nv1-hub-ui/        # Hub UI (lib, no_std + std)
+└── nv1-hub-ui-tester/ # UI tester (host-only, sdl2)
+nv1-msg/               # Message protocol (shared with nv1-ros)
+nv1-ros/               # ROS integration (workspace)
 ```
 
 ## Development Patterns

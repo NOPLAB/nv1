@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nv1-msg = { path = "../nv1-msg" }
+nv1-msg = { path = "../../nv1-msg" }
 pid = { version = "4.0.0", default-features = false }
 
 [dev-dependencies]
