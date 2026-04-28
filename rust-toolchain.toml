@@ -1,6 +1,5 @@
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-04-04"
 components = ["rust-src"]
 targets = ["thumbv7em-none-eabi"]
 profile = "default"
-
