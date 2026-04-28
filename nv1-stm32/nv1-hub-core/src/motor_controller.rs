@@ -44,6 +44,14 @@ impl MotorController {
         vel_y: f32,
         yaw: f32,
     ) -> (f32, f32, f32, f32) {
+        // Refuse to feed non-finite inputs into the PID or kinematics.
+        // A single NaN measurement would otherwise corrupt the PID's
+        // integral term forever and propagate NaN motor commands over
+        // the wire to the MD.
+        if !vel_x.is_finite() || !vel_y.is_finite() || !yaw.is_finite() {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+
         self.rotation_pid.setpoint(0.0);
         let rotation_pid_result = self.rotation_pid.next_control_output(yaw);
         let rotation_vel = rotation_pid_result.output;
@@ -115,6 +123,51 @@ mod tests {
         // produce opposite-sign output to roll the chassis straight.
         assert!(approx(m1, -m3));
         assert!(approx(m2, -m4));
+    }
+
+    #[test]
+    fn nan_yaw_returns_all_zero() {
+        let mut c = MotorController::new();
+        assert_eq!(
+            c.calculate_motor_values(1.0, 0.0, f32::NAN),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn nan_velocity_returns_all_zero() {
+        let mut c = MotorController::new();
+        assert_eq!(
+            c.calculate_motor_values(f32::NAN, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            c.calculate_motor_values(0.0, f32::NAN, 0.0),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn infinite_inputs_return_all_zero() {
+        let mut c = MotorController::new();
+        assert_eq!(
+            c.calculate_motor_values(f32::INFINITY, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            c.calculate_motor_values(0.0, 0.0, f32::NEG_INFINITY),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn nan_input_does_not_corrupt_subsequent_computation() {
+        let mut c = MotorController::new();
+        // A non-finite tick must not poison the PID state.
+        let _ = c.calculate_motor_values(f32::NAN, 0.0, 0.0);
+        let (m1, _, _, _) = c.calculate_motor_values(0.0, 0.0, 1.0);
+        assert!(m1.is_finite());
+        assert!(m1.abs() > 0.0);
     }
 
     #[test]
