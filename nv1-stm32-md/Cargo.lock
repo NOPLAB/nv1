@@ -819,6 +819,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nv1-md-core"
+version = "0.1.0"
+dependencies = [
+ "nv1-msg",
+ "pid",
+]
+
+[[package]]
 name = "nv1-msg"
 version = "0.1.9"
 dependencies = [
@@ -843,6 +851,7 @@ dependencies = [
  "heapless 0.9.2",
  "libm",
  "midly",
+ "nv1-md-core",
  "nv1-msg",
  "panic-halt",
  "panic-probe",

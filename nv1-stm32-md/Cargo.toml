@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [dependencies]
 nv1-msg = { path = "../nv1-msg" }
+nv1-md-core = { path = "../nv1-md-core" }
 
 corncobs = "0.1.4"
 cortex-m = { version = "0.7.7", features = [

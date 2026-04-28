@@ -15,7 +15,7 @@ static HEAP: Heap = Heap::empty();
 
 use core::cell::RefCell;
 
-use defmt::error;
+use defmt::{error, warn};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 #[cfg(not(feature = "defmt"))]
 use panic_halt as _;
@@ -23,29 +23,33 @@ use panic_halt as _;
 #[cfg(feature = "defmt")]
 use {defmt_rtt as _, panic_probe as _};
 
-use motor::{MotorGroupComplementary, MotorGroupSimple, Motors};
+use motor::{MotorGroupComplementary, MotorGroupSimple};
 
 use embassy_executor::Spawner;
 use embassy_stm32::{
-    bind_interrupts,
-    dma,
+    bind_interrupts, dma,
     gpio::OutputType,
-    mode,
-    peripherals,
+    mode, peripherals,
+    time::Hertz,
     timer::{
-        Channel,
         complementary_pwm::{ComplementaryPwm, ComplementaryPwmPin},
         qei::{Qei, QeiMode},
         simple_pwm::{PwmPin, SimplePwm},
+        Channel,
     },
-    usart::{self, Uart, Config},
-    time::Hertz,
+    usart::{self, Config, Uart},
 };
-use embassy_time::{Duration, Timer, with_timeout};
+use embassy_time::{with_timeout, Duration, Instant, Ticker};
 
 use fmt::info;
 
-use pid::Pid;
+use nv1_md_core::{
+    control::{SpeedController, SpeedControllerConfig},
+    encoder::{EncoderConfig, EncoderTracker},
+    failsafe::CommHealth,
+    frame::{FrameReader, PushOutcome},
+    motor::{pwm_command_from_output, Motors},
+};
 
 bind_interrupts!(struct Irqs {
     USART3 => usart::InterruptHandler<peripherals::USART3>;
@@ -53,21 +57,77 @@ bind_interrupts!(struct Irqs {
     DMA1_STREAM3 => dma::InterruptHandler<peripherals::DMA1_CH3>;
 });
 
-const MOTOR_ENCODER_PLUS: usize = 3 * 4;
+// ---------------------------------------------------------------------------
+// Robot geometry / control tuning
+// ---------------------------------------------------------------------------
+
+const MOTOR_ENCODER_COUNTS_PER_REV: u32 = 3 * 4;
 const MOTOR_GEAR_RATIO: f32 = 1.0 / 19.225;
 
-static G_HUB_MSG: Mutex<CriticalSectionRawMutex, RefCell<nv1_msg::md::ToMD>> =
-    Mutex::new(RefCell::new(nv1_msg::md::ToMD {
+/// Period of the closed-loop control update.
+///
+/// NOTE: PID gains were originally tuned against an unbounded loop period
+/// (effectively whatever the embedded executor scheduled). Pinning the period
+/// to a fixed value is a behaviour change — gains may need re-tuning on
+/// hardware. See README / commit message.
+const CONTROL_PERIOD_MS: u64 = 10;
+const CONTROL_PERIOD_S: f32 = (CONTROL_PERIOD_MS as f32) / 1000.0;
+
+/// Maximum age of the most recent valid Hub message before we trip the
+/// failsafe and stop the motors.
+const COMM_TIMEOUT_MS: u64 = 100;
+
+/// Encoder polarity per axis. Motor 4 is mounted with reversed polarity vs
+/// the others, so its encoder counts decrease for the rotation direction we
+/// treat as positive in software.
+const ENCODER_INVERTED: [bool; 4] = [false, false, false, true];
+
+/// PWM command polarity per axis. Currently all axes drive the bridge in the
+/// same direction — kept as a per-axis array so polarity can be flipped from
+/// configuration without touching the control logic.
+const COMMAND_INVERTED: [bool; 4] = [false, false, false, false];
+
+const PID_KP: f32 = 8.0;
+const PID_KI: f32 = 4.0;
+const PID_KD: f32 = 0.0;
+const PID_OUTPUT_LIMIT: f32 = 100.0;
+const PID_P_LIMIT: f32 = 100.0;
+const PID_I_LIMIT: f32 = 50.0;
+const PID_D_LIMIT: f32 = 0.0;
+
+const PWM_FREQ_HZ: u32 = 470;
+const PWM_NOMINAL_FULL_SCALE: u16 = 128;
+
+// ---------------------------------------------------------------------------
+// Shared state between UART receive task and control loop
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct HubState {
+    msg: nv1_msg::md::ToMD,
+    health: CommHealth,
+}
+
+const INITIAL_HUB_STATE: HubState = HubState {
+    msg: nv1_msg::md::ToMD {
         enable: false,
         m1: 0.0,
         m2: 0.0,
         m3: 0.0,
         m4: 0.0,
-    }));
+    },
+    health: CommHealth::new(COMM_TIMEOUT_MS),
+};
+
+static G_HUB: Mutex<CriticalSectionRawMutex, RefCell<HubState>> =
+    Mutex::new(RefCell::new(INITIAL_HUB_STATE));
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // initialize static heap
     {
         use core::mem::MaybeUninit;
         const HEAP_SIZE: usize = 1024;
@@ -103,7 +163,6 @@ async fn main(spawner: Spawner) {
 
     let pwm1_ch1 = PwmPin::new(p.PA8, OutputType::PushPull);
     let pwm1_ch4 = PwmPin::new(p.PA11, OutputType::PushPull);
-
     let pwm1_ch2n = ComplementaryPwmPin::new(p.PB14, OutputType::PushPull);
     let pwm1_ch3n = ComplementaryPwmPin::new(p.PB15, OutputType::PushPull);
 
@@ -117,7 +176,7 @@ async fn main(spawner: Spawner) {
         Some(pwm1_ch3n),
         Some(pwm1_ch4),
         None,
-        Hertz(470),
+        Hertz(PWM_FREQ_HZ),
         Default::default(),
     );
 
@@ -126,7 +185,9 @@ async fn main(spawner: Spawner) {
     pwm1.enable(Channel::Ch3);
     // TIM1 has no Ch4 complementary output, so we cannot use ComplementaryPwm::enable
     // (it would assert in stm32-metapac). Enable Ch4's regular output directly via PAC.
-    embassy_stm32::pac::TIM1.ccer().modify(|w| w.set_cce(3, true));
+    embassy_stm32::pac::TIM1
+        .ccer()
+        .modify(|w| w.set_cce(3, true));
 
     let motor_group1 = MotorGroupComplementary::new(
         pwm1,
@@ -134,7 +195,7 @@ async fn main(spawner: Spawner) {
         Channel::Ch1,
         Channel::Ch2,
         Channel::Ch3,
-        128,
+        PWM_NOMINAL_FULL_SCALE,
     );
 
     let pwm8_ch1 = PwmPin::new(p.PC6, OutputType::PushPull);
@@ -148,7 +209,7 @@ async fn main(spawner: Spawner) {
         Some(pwm8_ch2),
         Some(pwm8_ch3),
         Some(pwm8_ch4),
-        Hertz(470),
+        Hertz(PWM_FREQ_HZ),
         Default::default(),
     );
 
@@ -163,7 +224,7 @@ async fn main(spawner: Spawner) {
         Channel::Ch1,
         Channel::Ch4,
         Channel::Ch3,
-        128,
+        PWM_NOMINAL_FULL_SCALE,
     );
 
     let mut motors = Motors::new(motor_group1, motor_group2);
@@ -187,138 +248,175 @@ async fn main(spawner: Spawner) {
     let qei3 = Qei::new(p.TIM4, p.PB6, p.PB7, qei_config);
     let qei4 = Qei::new(p.TIM2, p.PA15, p.PB9, qei_config);
 
-    let mut prev1 = qei1.count();
-    let mut prev2 = qei2.count();
-    let mut prev3 = qei3.count();
-    let mut prev4 = qei4.count();
+    let encoder_cfg = |inverted: bool| EncoderConfig {
+        counts_per_motor_rev: MOTOR_ENCODER_COUNTS_PER_REV,
+        gear_ratio: MOTOR_GEAR_RATIO,
+        inverted,
+    };
 
-    let mut pid1: Pid<f32> = pid::Pid::new(0.0, 100.0);
-    let mut pid2: Pid<f32> = pid::Pid::new(0.0, 100.0);
-    let mut pid3: Pid<f32> = pid::Pid::new(0.0, 100.0);
-    let mut pid4: Pid<f32> = pid::Pid::new(0.0, 100.0);
+    let mut trackers = [
+        EncoderTracker::new(qei1.count().into(), encoder_cfg(ENCODER_INVERTED[0])),
+        EncoderTracker::new(qei2.count().into(), encoder_cfg(ENCODER_INVERTED[1])),
+        EncoderTracker::new(qei3.count().into(), encoder_cfg(ENCODER_INVERTED[2])),
+        EncoderTracker::new(qei4.count().into(), encoder_cfg(ENCODER_INVERTED[3])),
+    ];
 
-    pid1.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
-    pid2.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
-    pid3.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
-    pid4.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
+    let pid_cfg = SpeedControllerConfig {
+        kp: PID_KP,
+        ki: PID_KI,
+        kd: PID_KD,
+        p_limit: PID_P_LIMIT,
+        i_limit: PID_I_LIMIT,
+        d_limit: PID_D_LIMIT,
+        output_limit: PID_OUTPUT_LIMIT,
+    };
+
+    let mut controllers = [
+        SpeedController::new(pid_cfg),
+        SpeedController::new(pid_cfg),
+        SpeedController::new(pid_cfg),
+        SpeedController::new(pid_cfg),
+    ];
+
+    let mut ticker = Ticker::every(Duration::from_millis(CONTROL_PERIOD_MS));
 
     info!("[MD] Initialized");
 
+    let mut prev_alive = false;
+
     loop {
-        let msg = *G_HUB_MSG.lock().await.borrow();
+        let now_ms = Instant::now().as_millis();
 
-        if msg.enable {
-            pid1.setpoint(msg.m1);
-            pid2.setpoint(msg.m2);
-            pid3.setpoint(msg.m3);
-            pid4.setpoint(msg.m4);
+        let state = *G_HUB.lock().await.borrow();
+        let alive = state.health.is_alive(now_ms);
 
-            let cnt1 = qei1.count();
-            let cnt2 = qei2.count();
-            let cnt3 = qei3.count();
-            let cnt4 = qei4.count();
-            let delta1 = cnt1.wrapping_sub(prev1) as i16 as f32;
-            let delta2 = cnt2.wrapping_sub(prev2) as i16 as f32;
-            let delta3 = cnt3.wrapping_sub(prev3) as i16 as f32;
-            // Motor 4 is mounted with reversed polarity vs the others.
-            let delta4 = -(cnt4.wrapping_sub(prev4) as i16 as f32);
-            prev1 = cnt1;
-            prev2 = cnt2;
-            prev3 = cnt3;
-            prev4 = cnt4;
-
-            let motor1_rps = delta1 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
-            let motor2_rps = delta2 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
-            let motor3_rps = delta3 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
-            let motor4_rps = delta4 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
-
-            info!(
-                "rps: {}, {}, {}, {}",
-                motor1_rps, motor2_rps, motor3_rps, motor4_rps
-            );
-
-            if motor1_rps.is_nan() {
-                continue;
+        if alive != prev_alive {
+            if alive {
+                info!("[MD] hub link alive");
+            } else {
+                warn!("[MD] hub link lost — entering failsafe");
             }
-
-            let motor1_output = pid1.next_control_output(motor1_rps);
-            let motor2_output = pid2.next_control_output(motor2_rps);
-            let motor3_output = pid3.next_control_output(motor3_rps);
-            let motor4_output = pid4.next_control_output(motor4_rps);
-
-            motors.set_speed1(motor1_output.output as i16);
-            motors.set_speed2(motor2_output.output as i16);
-            motors.set_speed3(motor3_output.output as i16);
-            motors.set_speed4(motor4_output.output as i16);
-        } else {
-            pid1.setpoint(0.0);
-            pid2.setpoint(0.0);
-            pid3.setpoint(0.0);
-            pid4.setpoint(0.0);
-
-            motors.stop1();
-            motors.stop2();
-            motors.stop3();
-            motors.stop4();
+            prev_alive = alive;
         }
+
+        if alive && state.msg.enable {
+            let setpoints = [state.msg.m1, state.msg.m2, state.msg.m3, state.msg.m4];
+            let counts: [u32; 4] = [
+                qei1.count().into(),
+                qei2.count().into(),
+                qei3.count().into(),
+                qei4.count().into(),
+            ];
+
+            for i in 0..4 {
+                controllers[i].setpoint(setpoints[i]);
+                let rps = trackers[i].update(counts[i], CONTROL_PERIOD_S);
+
+                match controllers[i].next(rps) {
+                    Some(out) => {
+                        let cmd = pwm_command_from_output(out, COMMAND_INVERTED[i]);
+                        motors.set_speed(i, cmd);
+                    }
+                    None => {
+                        // Non-finite measurement — drop the command this tick
+                        // and reset integral so we don't carry corrupted state.
+                        controllers[i].reset();
+                        motors.stop(i);
+                    }
+                }
+            }
+        } else {
+            // Failsafe: comm lost OR hub disabled drive. Stop motors and reset
+            // the integrators so we don't kick on resume.
+            for c in controllers.iter_mut() {
+                c.setpoint(0.0);
+                c.reset();
+            }
+            motors.stop_all();
+        }
+
+        ticker.next().await;
     }
 }
+
+// ---------------------------------------------------------------------------
+// UART receive task
+// ---------------------------------------------------------------------------
+
+/// Maximum size of one COBS-framed `ToMD` message. Empirically the encoded
+/// length is well under 32 bytes; 64 leaves comfortable headroom and matches
+/// the buffer used by the Hub side serializer.
+const FRAME_BUF: usize = 64;
+
+/// Per-read timeout. The Hub publishes at ~100 Hz; tripping after 50 ms is
+/// long enough to ride out one missed frame but short enough to surface a
+/// disconnected cable within a control period.
+const READ_TIMEOUT_MS: u64 = 50;
 
 #[embassy_executor::task]
 async fn uart_task(usart: Uart<'static, mode::Async>) {
     let (_, uart_rx) = usart.split();
 
-    let mut dma_buf = [0u8; 128];
+    let mut dma_buf = [0u8; 256];
     let mut uart_rx = uart_rx.into_ring_buffered(&mut dma_buf);
-
     uart_rx.start_uart();
 
+    let mut reader: FrameReader<FRAME_BUF> = FrameReader::new();
+    let mut chunk = [0u8; 64];
+
     loop {
-        let mut byte = [0u8; 1];
-        let mut msg_with_cobs = [0u8; 64];
-        let mut c = 0;
-        loop {
-            let timeout_res =
-                with_timeout(Duration::from_millis(50), uart_rx.read(&mut byte)).await;
-            match timeout_res {
-                Ok(receive_res) => match receive_res {
-                    Ok(_size) => {
-                        msg_with_cobs[c] = byte[0];
-                        c += 1;
-
-                        if byte[0] == 0 {
-                            break;
-                        }
-                    }
-                    Err(_err) => {
-                        uart_rx.start_uart();
-                    }
-                },
-                Err(_) => {
-                    error!("[UART] timeout");
-
-                    G_HUB_MSG.lock().await.replace(nv1_msg::md::ToMD {
-                        enable: false,
-                        m1: 0.0,
-                        m2: 0.0,
-                        m3: 0.0,
-                        m4: 0.0,
-                    });
-
-                    break;
+        match with_timeout(
+            Duration::from_millis(READ_TIMEOUT_MS),
+            uart_rx.read(&mut chunk),
+        )
+        .await
+        {
+            Ok(Ok(n)) => {
+                for &b in &chunk[..n] {
+                    process_byte(&mut reader, b).await;
                 }
             }
-        }
-
-        match postcard::from_bytes_cobs::<nv1_msg::md::ToMD>(&mut msg_with_cobs) {
-            Ok(msg) => {
-                G_HUB_MSG.lock().await.replace(msg);
+            Ok(Err(_e)) => {
+                // Bus-level error (framing, overrun, parity). Reset our
+                // assembler, restart UART, and trip the failsafe.
+                reader.reset();
+                uart_rx.start_uart();
+                invalidate_health().await;
+                error!("[MD/UART] bus error");
             }
             Err(_) => {
-                continue;
+                // No bytes received within READ_TIMEOUT_MS — Hub link dead.
+                reader.reset();
+                invalidate_health().await;
             }
-        };
-
-        Timer::after_millis(5).await;
+        }
     }
+}
+
+async fn process_byte(reader: &mut FrameReader<FRAME_BUF>, b: u8) {
+    match reader.push(b) {
+        PushOutcome::Pending => {}
+        PushOutcome::Frame(frame) => match postcard::from_bytes_cobs::<nv1_msg::md::ToMD>(frame) {
+            Ok(msg) => {
+                let now_ms = Instant::now().as_millis();
+                let g = G_HUB.lock().await;
+                let mut state = g.borrow_mut();
+                state.msg = msg;
+                state.health.mark_received(now_ms);
+            }
+            Err(_) => {
+                invalidate_health().await;
+                warn!("[MD/UART] parse error");
+            }
+        },
+        PushOutcome::Overflow => {
+            invalidate_health().await;
+            warn!("[MD/UART] frame overflow");
+        }
+    }
+}
+
+async fn invalidate_health() {
+    let g = G_HUB.lock().await;
+    g.borrow_mut().health.invalidate();
 }
