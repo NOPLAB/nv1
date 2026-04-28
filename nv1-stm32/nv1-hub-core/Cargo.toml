@@ -8,6 +8,7 @@ nv1-msg = { path = "../../nv1-msg" }
 libm = { version = "0.2.16", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
 pid = { version = "4.0.0", default-features = false }
+rgb = { version = "0.8.50", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 
 [dev-dependencies]
