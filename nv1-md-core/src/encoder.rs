@@ -12,20 +12,6 @@ pub struct EncoderConfig {
     pub inverted: bool,
 }
 
-impl EncoderConfig {
-    /// Convert a signed count delta + sample period into output-shaft RPS.
-    pub fn output_rps(&self, delta_counts: i32, period_s: f32) -> f32 {
-        debug_assert!(period_s > 0.0);
-        debug_assert!(self.counts_per_motor_rev > 0);
-        let signed = if self.inverted {
-            -delta_counts
-        } else {
-            delta_counts
-        };
-        signed as f32 / self.counts_per_motor_rev as f32 * self.gear_ratio / period_s
-    }
-}
-
 /// Tracks a wrapping `u32` encoder count and yields per-call output RPS.
 pub struct EncoderTracker {
     prev: u32,
@@ -40,17 +26,21 @@ impl EncoderTracker {
         }
     }
 
-    pub fn config(&self) -> &EncoderConfig {
-        &self.config
-    }
-
     /// Read the new wrapping count and return output-shaft RPS over the last
     /// `period_s` seconds. Deltas are reduced through `i16` so the maximum
     /// representable change between calls is +/- 32_768 counts.
     pub fn update(&mut self, current_count: u32, period_s: f32) -> f32 {
-        let delta = current_count.wrapping_sub(self.prev) as i16 as i32;
+        debug_assert!(period_s > 0.0);
+        debug_assert!(self.config.counts_per_motor_rev > 0);
+        let raw_delta = current_count.wrapping_sub(self.prev) as i16 as i32;
         self.prev = current_count;
-        self.config.output_rps(delta, period_s)
+        let signed = if self.config.inverted {
+            -raw_delta
+        } else {
+            raw_delta
+        };
+        signed as f32 / self.config.counts_per_motor_rev as f32 * self.config.gear_ratio
+            / period_s
     }
 }
 

@@ -317,12 +317,7 @@ async fn main(spawner: Spawner) {
                         let cmd = pwm_command_from_output(out, COMMAND_INVERTED[i]);
                         motors.set_speed(i, cmd);
                     }
-                    None => {
-                        // Non-finite measurement — drop the command this tick
-                        // and reset integral so we don't carry corrupted state.
-                        controllers[i].reset();
-                        motors.stop(i);
-                    }
+                    None => motors.stop(i),
                 }
             }
         } else {

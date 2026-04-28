@@ -13,20 +13,6 @@ pub struct SpeedControllerConfig {
     pub output_limit: f32,
 }
 
-impl SpeedControllerConfig {
-    pub const fn new(kp: f32, ki: f32, kd: f32, output_limit: f32) -> Self {
-        Self {
-            kp,
-            ki,
-            kd,
-            p_limit: output_limit,
-            i_limit: output_limit / 2.0,
-            d_limit: output_limit,
-            output_limit,
-        }
-    }
-}
-
 fn build_pid(config: SpeedControllerConfig) -> Pid<f32> {
     let mut pid = Pid::new(0.0, config.output_limit);
     pid.p(config.kp, config.p_limit)
@@ -88,7 +74,15 @@ mod tests {
     use super::*;
 
     fn cfg() -> SpeedControllerConfig {
-        SpeedControllerConfig::new(8.0, 4.0, 0.0, 100.0)
+        SpeedControllerConfig {
+            kp: 8.0,
+            ki: 4.0,
+            kd: 0.0,
+            p_limit: 100.0,
+            i_limit: 50.0,
+            d_limit: 100.0,
+            output_limit: 100.0,
+        }
     }
 
     #[test]

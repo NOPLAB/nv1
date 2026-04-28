@@ -35,14 +35,6 @@ impl CommHealth {
             Some(t) => now_ms.saturating_sub(t) < self.timeout_ms,
         }
     }
-
-    pub fn timeout_ms(&self) -> u64 {
-        self.timeout_ms
-    }
-
-    pub fn last_seen_ms(&self) -> Option<u64> {
-        self.last_seen_ms
-    }
 }
 
 #[cfg(test)]

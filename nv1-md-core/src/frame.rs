@@ -23,12 +23,6 @@ pub enum PushOutcome<'a> {
     Overflow,
 }
 
-impl<const N: usize> Default for FrameReader<N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<const N: usize> FrameReader<N> {
     pub const fn new() -> Self {
         Self {
