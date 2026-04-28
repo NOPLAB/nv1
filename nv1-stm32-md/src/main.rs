@@ -359,18 +359,11 @@ async fn main(spawner: Spawner) {
     loop {
         let msg = G_HUB_MSG.lock().await.borrow().clone();
 
-        // if msg.enable {
-        if true {
-            // pid1.setpoint(msg.m1);
-            // pid2.setpoint(msg.m2);
-            // pid3.setpoint(msg.m3);
-            // pid4.setpoint(msg.m4);
-
-            // PID Tune
-            pid1.setpoint(5.0);
-            pid2.setpoint(5.0);
-            pid3.setpoint(5.0);
-            pid4.setpoint(5.0);
+        if msg.enable {
+            pid1.setpoint(msg.m1);
+            pid2.setpoint(msg.m2);
+            pid3.setpoint(msg.m3);
+            pid4.setpoint(msg.m4);
 
             let motor1_rps = read_encoder1() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
             let motor2_rps = read_encoder2() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
