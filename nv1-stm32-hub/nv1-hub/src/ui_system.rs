@@ -1,14 +1,14 @@
 use defmt::error;
 
 use embassy_stm32::exti::ExtiInput;
-use embassy_stm32::i2c::I2c;
+use embassy_stm32::i2c::{I2c, Master};
 use nv1_hub_ui::{Event, EventKey, HubUI};
 use ssd1306::mode::{BufferedGraphicsMode, DisplayConfig};
 use ssd1306::prelude::I2CInterface;
 use ssd1306::{size::DisplaySize128x64, Ssd1306};
 
 pub type DisplayType = Ssd1306<
-    I2CInterface<I2c<'static, embassy_stm32::mode::Blocking>>,
+    I2CInterface<I2c<'static, embassy_stm32::mode::Blocking, Master>>,
     DisplaySize128x64,
     BufferedGraphicsMode<DisplaySize128x64>,
 >;
@@ -16,18 +16,18 @@ pub type DisplayType = Ssd1306<
 #[allow(dead_code)]
 pub struct UISystem {
     pub display: &'static mut DisplayType,
-    pub gpio_ui_up: ExtiInput<'static>,
-    pub gpio_ui_down: ExtiInput<'static>,
-    pub gpio_ui_enter: ExtiInput<'static>,
+    pub gpio_ui_up: ExtiInput<'static, embassy_stm32::mode::Async>,
+    pub gpio_ui_down: ExtiInput<'static, embassy_stm32::mode::Async>,
+    pub gpio_ui_enter: ExtiInput<'static, embassy_stm32::mode::Async>,
 }
 
 #[allow(dead_code)]
 impl UISystem {
     pub fn new(
         display: &'static mut DisplayType,
-        gpio_ui_up: ExtiInput<'static>,
-        gpio_ui_down: ExtiInput<'static>,
-        gpio_ui_enter: ExtiInput<'static>,
+        gpio_ui_up: ExtiInput<'static, embassy_stm32::mode::Async>,
+        gpio_ui_down: ExtiInput<'static, embassy_stm32::mode::Async>,
+        gpio_ui_enter: ExtiInput<'static, embassy_stm32::mode::Async>,
     ) -> Self {
         Self {
             display,
@@ -255,9 +255,9 @@ impl UISystem {
 #[embassy_executor::task]
 pub async fn ui_task(
     mut ui: HubUI<'static, DisplayType>,
-    mut gpio_ui_up: ExtiInput<'static>,
-    mut gpio_ui_down: ExtiInput<'static>,
-    mut gpio_ui_enter: ExtiInput<'static>,
+    mut gpio_ui_up: ExtiInput<'static, embassy_stm32::mode::Async>,
+    mut gpio_ui_down: ExtiInput<'static, embassy_stm32::mode::Async>,
+    mut gpio_ui_enter: ExtiInput<'static, embassy_stm32::mode::Async>,
     shutdown: alloc::rc::Rc<core::cell::RefCell<bool>>,
     reboot: alloc::rc::Rc<core::cell::RefCell<bool>>,
 ) {

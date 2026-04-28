@@ -6,9 +6,9 @@ mod motor;
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use core::ptr::addr_of_mut;
+
 use embedded_alloc::LlffHeap as Heap;
-use midly::num::u7;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -28,25 +28,20 @@ use motor::{MotorGroupComplementary, MotorGroupSimple, Motors};
 use embassy_executor::Spawner;
 use embassy_stm32::{
     bind_interrupts,
-    gpio::{low_level::Pin, OutputType},
-    pac::{self, common::W, timer::vals::Sms},
-    timer::{
-        complementary_pwm::{ComplementaryPwm, ComplementaryPwmPin},
-        simple_pwm::{PwmPin, SimplePwm},
-        Channel,
-    },
-    usart::Uart,
-};
-use embassy_stm32::{pac::timer::vals::CcmrInputCcs, rcc::low_level::RccPeripheral};
-use embassy_stm32::{
+    dma,
+    gpio::OutputType,
+    mode,
     peripherals,
-    usart::{self, Config},
-};
-use embassy_stm32::{
+    timer::{
+        Channel,
+        complementary_pwm::{ComplementaryPwm, ComplementaryPwmPin},
+        qei::{Qei, QeiMode},
+        simple_pwm::{PwmPin, SimplePwm},
+    },
+    usart::{self, Uart, Config},
     time::Hertz,
-    timer::low_level::{GeneralPurpose16bitInstance, GeneralPurpose32bitInstance},
 };
-use embassy_time::{with_timeout, Duration, Timer};
+use embassy_time::{Duration, Timer, with_timeout};
 
 use fmt::info;
 
@@ -54,6 +49,8 @@ use pid::Pid;
 
 bind_interrupts!(struct Irqs {
     USART3 => usart::InterruptHandler<peripherals::USART3>;
+    DMA1_STREAM1 => dma::InterruptHandler<peripherals::DMA1_CH1>;
+    DMA1_STREAM3 => dma::InterruptHandler<peripherals::DMA1_CH3>;
 });
 
 const MOTOR_ENCODER_PLUS: usize = 3 * 4;
@@ -75,7 +72,7 @@ async fn main(spawner: Spawner) {
         use core::mem::MaybeUninit;
         const HEAP_SIZE: usize = 1024;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
-        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
+        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
 
     let mut config = embassy_stm32::Config::default();
@@ -104,11 +101,11 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_stm32::init(config);
 
-    let pwm1_ch1 = PwmPin::new_ch1(p.PA8, OutputType::PushPull);
-    let pwm1_ch4 = PwmPin::new_ch4(p.PA11, OutputType::PushPull);
+    let pwm1_ch1 = PwmPin::new(p.PA8, OutputType::PushPull);
+    let pwm1_ch4 = PwmPin::new(p.PA11, OutputType::PushPull);
 
-    let pwm1_ch2n = ComplementaryPwmPin::new_ch2(p.PB14, OutputType::PushPull);
-    let pwm1_ch3n = ComplementaryPwmPin::new_ch3(p.PB15, OutputType::PushPull);
+    let pwm1_ch2n = ComplementaryPwmPin::new(p.PB14, OutputType::PushPull);
+    let pwm1_ch3n = ComplementaryPwmPin::new(p.PB15, OutputType::PushPull);
 
     let mut pwm1 = ComplementaryPwm::new(
         p.TIM1,
@@ -127,7 +124,9 @@ async fn main(spawner: Spawner) {
     pwm1.enable(Channel::Ch1);
     pwm1.enable(Channel::Ch2);
     pwm1.enable(Channel::Ch3);
-    pwm1.enable(Channel::Ch4);
+    // TIM1 has no Ch4 complementary output, so we cannot use ComplementaryPwm::enable
+    // (it would assert in stm32-metapac). Enable Ch4's regular output directly via PAC.
+    embassy_stm32::pac::TIM1.ccer().modify(|w| w.set_cce(3, true));
 
     let motor_group1 = MotorGroupComplementary::new(
         pwm1,
@@ -138,10 +137,10 @@ async fn main(spawner: Spawner) {
         128,
     );
 
-    let pwm8_ch1 = PwmPin::new_ch1(p.PC6, OutputType::PushPull);
-    let pwm8_ch2 = PwmPin::new_ch2(p.PC7, OutputType::PushPull);
-    let pwm8_ch3 = PwmPin::new_ch3(p.PC8, OutputType::PushPull);
-    let pwm8_ch4 = PwmPin::new_ch4(p.PC9, OutputType::PushPull);
+    let pwm8_ch1 = PwmPin::new(p.PC6, OutputType::PushPull);
+    let pwm8_ch2 = PwmPin::new(p.PC7, OutputType::PushPull);
+    let pwm8_ch3 = PwmPin::new(p.PC8, OutputType::PushPull);
+    let pwm8_ch4 = PwmPin::new(p.PC9, OutputType::PushPull);
 
     let mut pwm8 = SimplePwm::new(
         p.TIM8,
@@ -153,10 +152,10 @@ async fn main(spawner: Spawner) {
         Default::default(),
     );
 
-    pwm8.enable(Channel::Ch1);
-    pwm8.enable(Channel::Ch2);
-    pwm8.enable(Channel::Ch3);
-    pwm8.enable(Channel::Ch4);
+    pwm8.channel(Channel::Ch1).enable();
+    pwm8.channel(Channel::Ch2).enable();
+    pwm8.channel(Channel::Ch3).enable();
+    pwm8.channel(Channel::Ch4).enable();
 
     let motor_group2 = MotorGroupSimple::new(
         pwm8,
@@ -172,175 +171,26 @@ async fn main(spawner: Spawner) {
     let mut config = Config::default();
     config.baudrate = 2_000_000;
     let usart = Uart::new(
-        p.USART3, p.PC5, p.PB10, Irqs, p.DMA1_CH3, p.DMA1_CH1, config,
+        p.USART3, p.PC5, p.PB10, p.DMA1_CH3, p.DMA1_CH1, Irqs, config,
     )
     .unwrap();
 
-    spawner.must_spawn(uart_task(usart));
+    spawner.spawn(uart_task(usart).unwrap());
 
-    const ENCODER_TIM_MAX_VALUE: u16 = 0xFF;
-    const ENCODER_TIM_HALF_VALUE: u16 = ENCODER_TIM_MAX_VALUE / 2;
-
-    // initialize gpio
-    pac::RCC.ahb1enr().modify(|r| r.set_gpioaen(true));
-    pac::RCC.ahb1enr().modify(|r| r.set_gpioben(true));
-
-    // encoder mode tim5 motor1
-
-    // initialize gpio
-    p.PA0
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(0, pac::gpio::vals::Moder::ALTERNATE));
-    p.PA0.block().afr(0).modify(|r| r.set_afr(0, 2));
-    p.PA1
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(1, pac::gpio::vals::Moder::ALTERNATE));
-    p.PA1.block().afr(0).modify(|r| r.set_afr(1, 2));
-
-    // initialize tim
-    peripherals::TIM5::enable_and_reset();
-
-    let tim5 = peripherals::TIM5::regs_gp32();
-
-    tim5.psc().write(|w| w.set_psc(0));
-    tim5.arr()
-        .write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE as u32));
-    tim5.cnt()
-        .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
-    tim5.ccmr_input(0)
-        .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
-    tim5.ccmr_input(0)
-        .modify(|w| w.set_ccs(1, CcmrInputCcs::from_bits(0b01)));
-    tim5.ccer().modify(|w| {
-        w.0 &= !(0x1 << 1) | !(0x1 << 5);
-    });
-    tim5.smcr().modify(|w| w.set_sms(Sms::ENCODER_MODE_3));
-    tim5.cr1().modify(|r| r.set_cen(true));
-
-    // encoder mode tim3 motor2
-
-    // initialize gpio
-    p.PB4
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(4, pac::gpio::vals::Moder::ALTERNATE));
-    p.PB4.block().afr(0).modify(|r| r.set_afr(4, 2));
-    p.PB5
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(5, pac::gpio::vals::Moder::ALTERNATE));
-    p.PB5.block().afr(0).modify(|r| r.set_afr(5, 2));
-
-    // initialize tim
-    peripherals::TIM3::enable_and_reset();
-
-    let tim3 = peripherals::TIM3::regs_gp16();
-
-    tim3.psc().write(|w| w.set_psc(0));
-    tim3.arr().write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE));
-    tim3.cnt().write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE));
-    tim3.ccmr_input(0)
-        .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
-    tim3.ccmr_input(0)
-        .modify(|w| w.set_ccs(1, CcmrInputCcs::from_bits(0b01)));
-    tim3.ccer().modify(|w| {
-        w.0 &= !(0x1 << 1) | !(0x1 << 5);
-    });
-    tim3.smcr().modify(|w| w.set_sms(Sms::ENCODER_MODE_3));
-    tim3.cr1().modify(|r| r.set_cen(true));
-
-    // encoder mod tim4 motor3
-
-    // initialize gpio
-    p.PB6
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(6, pac::gpio::vals::Moder::ALTERNATE));
-    p.PB6.block().afr(0).modify(|r| r.set_afr(6, 2));
-    p.PB7
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(7, pac::gpio::vals::Moder::ALTERNATE));
-    p.PB7.block().afr(0).modify(|r| r.set_afr(7, 2));
-
-    // initialize tim
-    peripherals::TIM4::enable_and_reset();
-
-    let tim4 = peripherals::TIM4::regs_gp16();
-
-    tim4.psc().write(|w| w.set_psc(0));
-    tim4.arr().write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE));
-    tim4.cnt().write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE));
-    tim4.ccmr_input(0)
-        .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
-    tim4.ccmr_input(0)
-        .modify(|w| w.set_ccs(1, CcmrInputCcs::from_bits(0b01)));
-    tim4.ccer().modify(|w| {
-        w.0 &= !(0x1 << 1) | !(0x1 << 5);
-    });
-    tim4.smcr().modify(|w| w.set_sms(Sms::ENCODER_MODE_3));
-    tim4.cr1().modify(|r| r.set_cen(true));
-
-    // encoder mode tim2 motor4
-
-    // initialize gpio
-    p.PA15
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(15, pac::gpio::vals::Moder::ALTERNATE));
-    p.PA15.block().afr(1).modify(|r| r.set_afr(7, 1));
-    p.PB9
-        .block()
-        .moder()
-        .modify(|r| r.set_moder(9, pac::gpio::vals::Moder::ALTERNATE));
-    p.PB9.block().afr(1).modify(|r| r.set_afr(1, 1));
-
-    // initialize tim
-    peripherals::TIM2::enable_and_reset();
-
-    let tim2 = peripherals::TIM2::regs_gp32();
-
-    tim2.psc().write(|w| w.set_psc(0));
-    tim2.arr()
-        .write(|w| w.set_arr(ENCODER_TIM_MAX_VALUE as u32));
-    tim2.cnt()
-        .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
-    tim2.ccmr_input(0)
-        .modify(|w| w.set_ccs(0, CcmrInputCcs::from_bits(0b01)));
-    tim2.ccmr_input(0)
-        .modify(|w| w.set_ccs(1, CcmrInputCcs::from_bits(0b01)));
-    tim2.ccer().modify(|w| {
-        w.0 &= !(0x1 << 1) | !(0x1 << 5);
-    });
-    tim2.smcr().modify(|w| w.set_sms(Sms::ENCODER_MODE_3));
-    tim2.cr1().modify(|r| r.set_cen(true));
-
-    let read_encoder1 = || {
-        let tmp = (tim5.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim5.cnt()
-            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
-        return tmp;
+    let qei_config = embassy_stm32::timer::qei::Config {
+        mode: QeiMode::Mode3,
+        ..Default::default()
     };
-    let read_encoder2 = || {
-        let tmp = (tim3.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim3.cnt()
-            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u16));
-        return tmp;
-    };
-    let read_encoder3 = || {
-        let tmp = (tim4.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim4.cnt()
-            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u16));
-        return tmp;
-    };
-    let read_encoder4 = || {
-        let tmp = -(tim2.cnt().read().cnt() as i16 - ENCODER_TIM_HALF_VALUE as i16) as f32;
-        tim2.cnt()
-            .write(|w| w.set_cnt(ENCODER_TIM_HALF_VALUE as u32));
-        return tmp;
-    };
+
+    let qei1 = Qei::new(p.TIM5, p.PA0, p.PA1, qei_config);
+    let qei2 = Qei::new(p.TIM3, p.PB4, p.PB5, qei_config);
+    let qei3 = Qei::new(p.TIM4, p.PB6, p.PB7, qei_config);
+    let qei4 = Qei::new(p.TIM2, p.PA15, p.PB9, qei_config);
+
+    let mut prev1 = qei1.count();
+    let mut prev2 = qei2.count();
+    let mut prev3 = qei3.count();
+    let mut prev4 = qei4.count();
 
     let mut pid1: Pid<f32> = pid::Pid::new(0.0, 100.0);
     let mut pid2: Pid<f32> = pid::Pid::new(0.0, 100.0);
@@ -352,12 +202,10 @@ async fn main(spawner: Spawner) {
     pid3.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
     pid4.p(8.0, 100.0).i(4.0, 50.0).d(0.0, 0.0);
 
-    // let midi = midly::parse(include_bytes!("../midi.mid")).unwrap();
-
     info!("[MD] Initialized");
 
     loop {
-        let msg = G_HUB_MSG.lock().await.borrow().clone();
+        let msg = *G_HUB_MSG.lock().await.borrow();
 
         if msg.enable {
             pid1.setpoint(msg.m1);
@@ -365,10 +213,24 @@ async fn main(spawner: Spawner) {
             pid3.setpoint(msg.m3);
             pid4.setpoint(msg.m4);
 
-            let motor1_rps = read_encoder1() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
-            let motor2_rps = read_encoder2() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
-            let motor3_rps = read_encoder3() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
-            let motor4_rps = read_encoder4() / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
+            let cnt1 = qei1.count();
+            let cnt2 = qei2.count();
+            let cnt3 = qei3.count();
+            let cnt4 = qei4.count();
+            let delta1 = cnt1.wrapping_sub(prev1) as i16 as f32;
+            let delta2 = cnt2.wrapping_sub(prev2) as i16 as f32;
+            let delta3 = cnt3.wrapping_sub(prev3) as i16 as f32;
+            // Motor 4 is mounted with reversed polarity vs the others.
+            let delta4 = -(cnt4.wrapping_sub(prev4) as i16 as f32);
+            prev1 = cnt1;
+            prev2 = cnt2;
+            prev3 = cnt3;
+            prev4 = cnt4;
+
+            let motor1_rps = delta1 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
+            let motor2_rps = delta2 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
+            let motor3_rps = delta3 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
+            let motor4_rps = delta4 / MOTOR_ENCODER_PLUS as f32 * MOTOR_GEAR_RATIO / 0.01;
 
             info!(
                 "rps: {}, {}, {}, {}",
@@ -399,79 +261,17 @@ async fn main(spawner: Spawner) {
             motors.stop3();
             motors.stop4();
         }
-
-        // MIDI
-        // motors.set_speed1(10);
-        // motors.set_speed2(10);
-        // motors.set_speed3(10);
-        // motors.set_speed4(10);
-
-        // let mut running_notes: Vec<(u7, u7)> = Vec::new();
-
-        // for (i, track) in midi.clone().1.enumerate() {
-        //     if i != 1 {
-        //         continue;
-        //     }
-
-        //     let track = track.unwrap();
-        //     for event in track {
-        //         let event = event.unwrap();
-
-        //         match event.kind {
-        //             midly::TrackEventKind::Midi { channel, message } => {
-        //                 if channel == 0 {
-        //                     match message {
-        //                         midly::MidiMessage::NoteOn { key, vel } => {
-        //                             running_notes.push((key, vel));
-        //                         }
-        //                         midly::MidiMessage::NoteOff { key, vel: _ } => {
-        //                             running_notes.retain(|&x| x.0 != key.as_int());
-        //                         }
-        //                         _ => (),
-        //                     }
-
-        //                     let max_note = running_notes.iter().max_by_key(|x| x.0.as_int());
-        //                     let second_max_note = running_notes
-        //                         .iter()
-        //                         .filter(|x| x.0 != max_note.unwrap().0)
-        //                         .max_by_key(|x| x.0.as_int());
-        //                     if let Some(note) = max_note {
-        //                         let key = note.0.as_int() as f32;
-        //                         let hz = 440.0 * libm::powf(2.0_f32, (key - 69.0) / 12.0);
-
-        //                         motors.group1.set_frequency(Hertz(hz as u32));
-        //                     }
-        //                     if let Some(note) = second_max_note {
-        //                         let key = note.0.as_int() as f32;
-        //                         let hz = 440.0 * libm::powf(2.0_f32, (key - 69.0) / 12.0);
-
-        //                         motors.group2.set_frequency(Hertz(hz as u32));
-        //                     }
-        //                 }
-        //             }
-        //             _ => (),
-        //         }
-
-        //         if event.delta.as_int() == 0 {
-        //             continue;
-        //         } else {
-        //             Timer::after_millis(event.delta.as_int() as u64).await;
-        //         }
-        //     }
-        // }
     }
 }
 
 #[embassy_executor::task]
-async fn uart_task(
-    usart: Uart<'static, peripherals::USART3, peripherals::DMA1_CH3, peripherals::DMA1_CH1>,
-) {
+async fn uart_task(usart: Uart<'static, mode::Async>) {
     let (_, uart_rx) = usart.split();
 
     let mut dma_buf = [0u8; 128];
     let mut uart_rx = uart_rx.into_ring_buffered(&mut dma_buf);
 
-    let _ = uart_rx.start();
+    uart_rx.start_uart();
 
     loop {
         let mut byte = [0u8; 1];
@@ -491,9 +291,7 @@ async fn uart_task(
                         }
                     }
                     Err(_err) => {
-                        // error!("[UART] read error: {:?}, {}", err, c);
-
-                        let _ = uart_rx.start();
+                        uart_rx.start_uart();
                     }
                 },
                 Err(_) => {
@@ -514,11 +312,9 @@ async fn uart_task(
 
         match postcard::from_bytes_cobs::<nv1_msg::md::ToMD>(&mut msg_with_cobs) {
             Ok(msg) => {
-                // info!("[UART] received msg: {:?}", msg.m1);
                 G_HUB_MSG.lock().await.replace(msg);
             }
             Err(_) => {
-                // info!("[UART] postcard decode error");
                 continue;
             }
         };

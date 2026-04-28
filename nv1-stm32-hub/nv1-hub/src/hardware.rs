@@ -1,14 +1,14 @@
 use crate::constants::*;
+use embassy_stm32::Peri;
 use embassy_stm32::{
     adc::Adc,
     gpio::{Level, Output, Speed},
-    i2c::{self, I2c},
+    i2c::{self, I2c, Master},
     peripherals,
     time::Hertz,
     timer::{low_level::CountingMode, simple_pwm::SimplePwm},
     usart::{self, Uart},
 };
-use embassy_time::Duration;
 
 pub struct HardwareConfig {
     pub uart_jetson_baudrate: u32,
@@ -59,23 +59,24 @@ pub struct UartPins {
     pub uart_bno: Uart<'static, embassy_stm32::mode::Async>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn initialize_uarts(
-    usart3: peripherals::USART3,
-    pc5: peripherals::PC5,
-    pb10: peripherals::PB10,
-    dma1_ch3: peripherals::DMA1_CH3,
-    dma1_ch1: peripherals::DMA1_CH1,
-    uart4: peripherals::UART4,
-    pc11: peripherals::PC11,
-    pc10: peripherals::PC10,
-    dma1_ch4: peripherals::DMA1_CH4,
-    dma1_ch2: peripherals::DMA1_CH2,
-    usart6: peripherals::USART6,
-    pc7: peripherals::PC7,
-    pc6: peripherals::PC6,
-    dma2_ch6: peripherals::DMA2_CH6,
-    dma2_ch1: peripherals::DMA2_CH1,
-    pa0: peripherals::PA0,
+    usart3: Peri<'static, peripherals::USART3>,
+    pc5: Peri<'static, peripherals::PC5>,
+    pb10: Peri<'static, peripherals::PB10>,
+    dma1_ch3: Peri<'static, peripherals::DMA1_CH3>,
+    dma1_ch1: Peri<'static, peripherals::DMA1_CH1>,
+    uart4: Peri<'static, peripherals::UART4>,
+    pc11: Peri<'static, peripherals::PC11>,
+    pc10: Peri<'static, peripherals::PC10>,
+    dma1_ch4: Peri<'static, peripherals::DMA1_CH4>,
+    dma1_ch2: Peri<'static, peripherals::DMA1_CH2>,
+    usart6: Peri<'static, peripherals::USART6>,
+    pc7: Peri<'static, peripherals::PC7>,
+    pc6: Peri<'static, peripherals::PC6>,
+    dma2_ch6: Peri<'static, peripherals::DMA2_CH6>,
+    dma2_ch1: Peri<'static, peripherals::DMA2_CH1>,
+    pa0: Peri<'static, peripherals::PA0>,
     config: &HardwareConfig,
 ) -> UartPins {
     use crate::Irqs;
@@ -87,9 +88,9 @@ pub fn initialize_uarts(
         usart3,
         pc5,
         pb10,
-        Irqs,
         dma1_ch3,
         dma1_ch1,
+        Irqs,
         uart_jetson_config,
     )
     .unwrap();
@@ -97,12 +98,12 @@ pub fn initialize_uarts(
     // UART for Motor Driver communication
     let mut uart_md_config = usart::Config::default();
     uart_md_config.baudrate = config.uart_md_baudrate;
-    let uart_md = Uart::new(uart4, pc11, pc10, Irqs, dma1_ch4, dma1_ch2, uart_md_config).unwrap();
+    let uart_md = Uart::new(uart4, pc11, pc10, dma1_ch4, dma1_ch2, Irqs, uart_md_config).unwrap();
 
     // UART for BNO08x sensor
     let mut uart_bno_config = usart::Config::default();
     uart_bno_config.baudrate = bno08x_rvc::BNO08X_UART_RVC_BAUD_RATE;
-    let uart_bno = Uart::new(usart6, pc7, pc6, Irqs, dma2_ch6, dma2_ch1, uart_bno_config).unwrap();
+    let uart_bno = Uart::new(usart6, pc7, pc6, dma2_ch6, dma2_ch1, Irqs, uart_bno_config).unwrap();
 
     // Reset BNO08x sensor (we'll do this synchronously since we don't have async context)
     let mut gpio_reset = Output::new(pa0, Level::High, Speed::Low);
@@ -116,16 +117,17 @@ pub fn initialize_uarts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn initialize_adc_and_gpio(
-    adc1: peripherals::ADC1,
-    pb12: peripherals::PB12,
-    pb13: peripherals::PB13,
-    pb14: peripherals::PB14,
-    pb15: peripherals::PB15,
-    pb0: peripherals::PB0,
-    pb1: peripherals::PB1,
-    pb4: peripherals::PB4,
-    pb5: peripherals::PB5,
+    adc1: Peri<'static, peripherals::ADC1>,
+    pb12: Peri<'static, peripherals::PB12>,
+    pb13: Peri<'static, peripherals::PB13>,
+    pb14: Peri<'static, peripherals::PB14>,
+    pb15: Peri<'static, peripherals::PB15>,
+    pb0: Peri<'static, peripherals::PB0>,
+    pb1: Peri<'static, peripherals::PB1>,
+    pb4: Peri<'static, peripherals::PB4>,
+    pb5: Peri<'static, peripherals::PB5>,
 ) -> (
     Adc<'static, peripherals::ADC1>,
     Output<'static>,
@@ -153,23 +155,24 @@ pub fn initialize_adc_and_gpio(
 }
 
 pub fn initialize_i2c(
-    i2c3: peripherals::I2C3,
-    pa8: peripherals::PA8,
-    pc9: peripherals::PC9,
-) -> I2c<'static, embassy_stm32::mode::Blocking> {
+    i2c3: Peri<'static, peripherals::I2C3>,
+    pa8: Peri<'static, peripherals::PA8>,
+    pc9: Peri<'static, peripherals::PC9>,
+) -> I2c<'static, embassy_stm32::mode::Blocking, Master> {
     let mut config = i2c::Config::default();
-    config.timeout = Duration::from_millis(10);
-    I2c::new_blocking(i2c3, pa8, pc9, Hertz::khz(200), config)
+    config.frequency = Hertz::khz(200);
+    config.timeout = embassy_time::Duration::from_millis(10);
+    I2c::new_blocking(i2c3, pa8, pc9, config)
 }
 
 pub fn initialize_neo_pixel_pwm(
-    tim4: peripherals::TIM4,
-    pb6: peripherals::PB6,
+    tim4: Peri<'static, peripherals::TIM4>,
+    pb6: Peri<'static, peripherals::PB6>,
     config: &HardwareConfig,
 ) -> SimplePwm<'static, peripherals::TIM4> {
     SimplePwm::new(
         tim4,
-        Some(embassy_stm32::timer::simple_pwm::PwmPin::new_ch1(
+        Some(embassy_stm32::timer::simple_pwm::PwmPin::new(
             pb6,
             embassy_stm32::gpio::OutputType::PushPull,
         )),

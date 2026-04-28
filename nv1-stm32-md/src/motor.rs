@@ -1,9 +1,7 @@
-use embassy_stm32::{
-    time::Hertz,
-    timer::{
-        complementary_pwm::ComplementaryPwm, simple_pwm::SimplePwm, CaptureCompare16bitInstance,
-        Channel, ComplementaryCaptureCompare16bitInstance,
-    },
+use embassy_stm32::timer::{
+    AdvancedInstance4Channel, Channel, GeneralInstance4Channel,
+    complementary_pwm::ComplementaryPwm,
+    simple_pwm::SimplePwm,
 };
 
 pub trait MotorGroup {
@@ -11,7 +9,6 @@ pub trait MotorGroup {
     fn stop1(&mut self);
     fn set_speed2(&mut self, speed: i16);
     fn stop2(&mut self);
-    fn set_frequency(&mut self, frequency: Hertz);
 }
 
 pub struct Motor {
@@ -21,7 +18,7 @@ pub struct Motor {
 
 pub struct MotorGroupComplementary<'a, TIM>
 where
-    TIM: ComplementaryCaptureCompare16bitInstance,
+    TIM: AdvancedInstance4Channel,
 {
     pwm: ComplementaryPwm<'a, TIM>,
     motor1: Motor,
@@ -31,7 +28,7 @@ where
 
 impl<'a, TIM> MotorGroupComplementary<'a, TIM>
 where
-    TIM: ComplementaryCaptureCompare16bitInstance,
+    TIM: AdvancedInstance4Channel,
 {
     pub fn new(
         pwm: ComplementaryPwm<'a, TIM>,
@@ -60,17 +57,17 @@ where
 
 impl<'a, TIM> MotorGroup for MotorGroupComplementary<'a, TIM>
 where
-    TIM: ComplementaryCaptureCompare16bitInstance,
+    TIM: AdvancedInstance4Channel,
 {
     fn set_speed1(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor1.ch_a, (speed as f32 * self.multiply) as u16);
+                .set_duty(self.motor1.ch_a, (speed as f32 * self.multiply) as u32);
             self.pwm.set_duty(self.motor1.ch_b, 0);
         } else {
             self.pwm.set_duty(self.motor1.ch_a, 0);
             self.pwm
-                .set_duty(self.motor1.ch_b, (-speed as f32 * self.multiply) as u16);
+                .set_duty(self.motor1.ch_b, (-speed as f32 * self.multiply) as u32);
         }
     }
 
@@ -82,12 +79,12 @@ where
     fn set_speed2(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor2.ch_a, (speed as f32 * self.multiply) as u16);
+                .set_duty(self.motor2.ch_a, (speed as f32 * self.multiply) as u32);
             self.pwm.set_duty(self.motor2.ch_b, 0);
         } else {
             self.pwm.set_duty(self.motor2.ch_a, 0);
             self.pwm
-                .set_duty(self.motor2.ch_b, (-speed as f32 * self.multiply) as u16);
+                .set_duty(self.motor2.ch_b, (-speed as f32 * self.multiply) as u32);
         }
     }
 
@@ -95,15 +92,11 @@ where
         self.pwm.set_duty(self.motor2.ch_a, 0);
         self.pwm.set_duty(self.motor2.ch_b, 0);
     }
-
-    fn set_frequency(&mut self, frequency: Hertz) {
-        self.pwm.set_frequency(frequency);
-    }
 }
 
 pub struct MotorGroupSimple<'a, TIM>
 where
-    TIM: CaptureCompare16bitInstance,
+    TIM: GeneralInstance4Channel,
 {
     pwm: SimplePwm<'a, TIM>,
     motor1: Motor,
@@ -113,17 +106,17 @@ where
 
 impl<'a, TIM> MotorGroupSimple<'a, TIM>
 where
-    TIM: CaptureCompare16bitInstance,
+    TIM: GeneralInstance4Channel,
 {
     pub fn new(
-        pwm: SimplePwm<'a, TIM>,
+        mut pwm: SimplePwm<'a, TIM>,
         motor1_a: Channel,
         motor1_b: Channel,
         motor2_a: Channel,
         motor2_b: Channel,
         width: u16,
     ) -> MotorGroupSimple<'a, TIM> {
-        let multiply = pwm.get_max_duty() as f32 / width as f32;
+        let multiply = pwm.channel(motor1_a).max_duty_cycle() as f32 / width as f32;
 
         MotorGroupSimple {
             pwm,
@@ -142,44 +135,44 @@ where
 
 impl<'a, TIM> MotorGroup for MotorGroupSimple<'a, TIM>
 where
-    TIM: CaptureCompare16bitInstance,
+    TIM: GeneralInstance4Channel,
 {
     fn set_speed1(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor1.ch_a, (speed as f32 * self.multiply) as u16);
-            self.pwm.set_duty(self.motor1.ch_b, 0);
+                .channel(self.motor1.ch_a)
+                .set_duty_cycle((speed as f32 * self.multiply) as u32);
+            self.pwm.channel(self.motor1.ch_b).set_duty_cycle(0);
         } else {
-            self.pwm.set_duty(self.motor1.ch_a, 0);
+            self.pwm.channel(self.motor1.ch_a).set_duty_cycle(0);
             self.pwm
-                .set_duty(self.motor1.ch_b, (-speed as f32 * self.multiply) as u16);
+                .channel(self.motor1.ch_b)
+                .set_duty_cycle((-speed as f32 * self.multiply) as u32);
         }
     }
 
     fn stop1(&mut self) {
-        self.pwm.set_duty(self.motor1.ch_a, 0);
-        self.pwm.set_duty(self.motor1.ch_b, 0);
+        self.pwm.channel(self.motor1.ch_a).set_duty_cycle(0);
+        self.pwm.channel(self.motor1.ch_b).set_duty_cycle(0);
     }
 
     fn set_speed2(&mut self, speed: i16) {
         if speed > 0 {
             self.pwm
-                .set_duty(self.motor2.ch_a, (speed as f32 * self.multiply) as u16);
-            self.pwm.set_duty(self.motor2.ch_b, 0);
+                .channel(self.motor2.ch_a)
+                .set_duty_cycle((speed as f32 * self.multiply) as u32);
+            self.pwm.channel(self.motor2.ch_b).set_duty_cycle(0);
         } else {
-            self.pwm.set_duty(self.motor2.ch_a, 0);
+            self.pwm.channel(self.motor2.ch_a).set_duty_cycle(0);
             self.pwm
-                .set_duty(self.motor2.ch_b, (-speed as f32 * self.multiply) as u16);
+                .channel(self.motor2.ch_b)
+                .set_duty_cycle((-speed as f32 * self.multiply) as u32);
         }
     }
 
     fn stop2(&mut self) {
-        self.pwm.set_duty(self.motor2.ch_a, 0);
-        self.pwm.set_duty(self.motor2.ch_b, 0);
-    }
-
-    fn set_frequency(&mut self, frequency: Hertz) {
-        self.pwm.set_frequency(frequency);
+        self.pwm.channel(self.motor2.ch_a).set_duty_cycle(0);
+        self.pwm.channel(self.motor2.ch_b).set_duty_cycle(0);
     }
 }
 
@@ -231,10 +224,5 @@ where
 
     pub fn stop4(&mut self) {
         self.group2.stop2();
-    }
-
-    pub fn set_frequency(&mut self, frequency: Hertz) {
-        self.group1.set_frequency(frequency);
-        self.group2.set_frequency(frequency);
     }
 }

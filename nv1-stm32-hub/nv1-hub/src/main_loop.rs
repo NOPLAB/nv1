@@ -8,6 +8,7 @@ use crate::{
 use alloc::rc::Rc;
 use core::cell::RefCell;
 use defmt::info;
+use embassy_stm32::Peri;
 use embassy_stm32::{exti::ExtiInput, peripherals, usart::Uart};
 use embassy_time::{Instant, Timer};
 use nv1_msg;
@@ -18,7 +19,7 @@ pub struct MainLoopContext {
     pub settings: Rc<RefCell<Settings>>,
     pub value_line: Rc<RefCell<f32>>,
     pub value_have_ball: Rc<RefCell<u32>>,
-    pub gpio_ui_toggle: ExtiInput<'static>,
+    pub gpio_ui_toggle: ExtiInput<'static, embassy_stm32::mode::Async>,
 }
 
 impl MainLoopContext {
@@ -27,7 +28,7 @@ impl MainLoopContext {
         settings: Rc<RefCell<Settings>>,
         value_line: Rc<RefCell<f32>>,
         value_have_ball: Rc<RefCell<u32>>,
-        gpio_ui_toggle: ExtiInput<'static>,
+        gpio_ui_toggle: ExtiInput<'static, embassy_stm32::mode::Async>,
     ) -> Self {
         Self {
             motor_controller,
@@ -43,10 +44,10 @@ impl MainLoopContext {
         mut adc_sensor: AdcSensor,
         mut uart_md: Uart<'static, embassy_stm32::mode::Async>,
         mut adc_pins: (
-            peripherals::PC0,
-            peripherals::PC1,
-            peripherals::PC2,
-            peripherals::PC3,
+            Peri<'static, peripherals::PC0>,
+            Peri<'static, peripherals::PC1>,
+            Peri<'static, peripherals::PC2>,
+            Peri<'static, peripherals::PC3>,
         ),
     ) -> ! {
         let mut prev_time = Instant::now();

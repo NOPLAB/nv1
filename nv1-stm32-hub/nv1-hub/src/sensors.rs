@@ -1,4 +1,5 @@
 use core::f32::consts::PI;
+use embassy_stm32::Peri;
 use embassy_stm32::adc::Adc;
 use embassy_stm32::gpio::Output;
 use embassy_stm32::peripherals;
@@ -39,7 +40,7 @@ pub struct IrBallSensor {
 
 impl AdcSensor {
     pub fn new(
-        mut adc: Adc<'static, peripherals::ADC1>,
+        adc: Adc<'static, peripherals::ADC1>,
         line_s0: Output<'static>,
         line_s1: Output<'static>,
         line_s2: Output<'static>,
@@ -49,8 +50,6 @@ impl AdcSensor {
         ir_s2: Output<'static>,
         ir_s3: Output<'static>,
     ) -> Self {
-        adc.set_sample_time(embassy_stm32::adc::SampleTime::CYCLES56);
-
         let mut line_sin = [0.0_f32; LINE_SENSORS_COUNT];
         let mut line_cos = [0.0_f32; LINE_SENSORS_COUNT];
         generate_adc_vec(
@@ -98,21 +97,24 @@ impl AdcSensor {
 
     pub fn read_sensors(
         &mut self,
-        pc0: &mut peripherals::PC0,
-        pc1: &mut peripherals::PC1,
-        pc2: &mut peripherals::PC2,
-        pc3: &mut peripherals::PC3,
+        pc0: &mut Peri<'static, peripherals::PC0>,
+        pc1: &mut Peri<'static, peripherals::PC1>,
+        pc2: &mut Peri<'static, peripherals::PC2>,
+        pc3: &mut Peri<'static, peripherals::PC3>,
     ) -> SensorReadings {
+        use embassy_stm32::adc::SampleTime;
+        let sample_time = SampleTime::CYCLES56;
+
         let mut adc_line = [0u16; LINE_SENSORS_COUNT];
         let mut adc_ir = [0u16; IR_SENSORS_COUNT];
-        let adc_have_ball = self.adc.blocking_read(pc3);
+        let adc_have_ball = self.adc.blocking_read(pc3, sample_time);
 
         for i in 0..IR_SENSORS_COUNT {
             self.set_multiplexer_pins(i);
 
-            adc_line[i] = self.adc.blocking_read(pc0);
-            adc_line[i + IR_SENSORS_COUNT] = self.adc.blocking_read(pc1);
-            adc_ir[i] = self.adc.blocking_read(pc2);
+            adc_line[i] = self.adc.blocking_read(pc0, sample_time);
+            adc_line[i + IR_SENSORS_COUNT] = self.adc.blocking_read(pc1, sample_time);
+            adc_ir[i] = self.adc.blocking_read(pc2, sample_time);
         }
 
         let adc_line = adc_line

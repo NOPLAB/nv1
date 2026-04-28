@@ -1,8 +1,9 @@
 use core::f32::consts::PI;
+use embassy_stm32::Peri;
 use embassy_stm32::{
     peripherals,
     time::Hertz,
-    timer::{simple_pwm::SimplePwm, Ch1Dma, GeneralInstance4Channel},
+    timer::{Ch1, Channel, Dma as TimerDma, GeneralInstance4Channel, simple_pwm::SimplePwm},
 };
 use embassy_time::{Duration, Timer};
 use rgb::RGB8;
@@ -33,7 +34,7 @@ where
     T: GeneralInstance4Channel,
 {
     pub fn new(pwm: SimplePwm<'static, T>, pwm_hz: Hertz) -> Self {
-        let max_duty = pwm.max_duty_cycle();
+        let max_duty = pwm.max_duty_cycle() as u16;
 
         let one_duty: u16 = max_duty / 2;
         let zero_duty: u16 = (max_duty as f32 * (260.0e-6 * (pwm_hz.0 / 1000) as f32)) as u16;
@@ -46,7 +47,18 @@ where
         }
     }
 
-    async fn write(&mut self, dma: &mut impl Ch1Dma<T>, colors: &mut [RGB8]) {
+    async fn write<D: TimerDma<T, Ch1>>(
+        &mut self,
+        dma: &mut Peri<'static, D>,
+        colors: &mut [RGB8],
+    ) where
+        crate::Irqs: embassy_stm32::interrupt::typelevel::Binding<
+                D::Interrupt,
+                embassy_stm32::dma::InterruptHandler<D>,
+            >,
+    {
+        use crate::Irqs;
+
         let mut duty = [0u16; 24 * NEO_PIXEL_NUM];
 
         for (n, color) in colors.iter_mut().enumerate() {
@@ -76,11 +88,22 @@ where
         }
 
         self.pwm.ch1().enable();
-        self.pwm.waveform_ch1(dma, &duty).await;
+        self.pwm
+            .waveform::<Ch1, _, _>(dma.reborrow(), Irqs, Channel::Ch1, &duty)
+            .await;
         self.pwm.ch1().disable();
     }
 
-    pub async fn set_colors(&mut self, dma: &mut impl Ch1Dma<T>, colors: &mut [RGB8]) {
+    pub async fn set_colors<D: TimerDma<T, Ch1>>(
+        &mut self,
+        dma: &mut Peri<'static, D>,
+        colors: &mut [RGB8],
+    ) where
+        crate::Irqs: embassy_stm32::interrupt::typelevel::Binding<
+                D::Interrupt,
+                embassy_stm32::dma::InterruptHandler<D>,
+            >,
+    {
         let angle = 90.0 - self.brightness as f32;
         let angle = angle * core::f32::consts::PI / 180.0;
 
@@ -116,7 +139,7 @@ where
 #[embassy_executor::task]
 pub async fn neo_pixel_task(
     mut neo_pixel: NeoPixelPwm<peripherals::TIM4>,
-    dma: &'static mut peripherals::DMA1_CH0,
+    mut dma: Peri<'static, peripherals::DMA1_CH0>,
 ) {
     let mut neo_pixel_data = [RGB8::default(); LED_COUNT];
     for c in neo_pixel_data.iter_mut() {
@@ -142,7 +165,7 @@ pub async fn neo_pixel_task(
                 neo_pixel_data[index] = color;
             }
 
-            neo_pixel.set_colors(dma, &mut neo_pixel_data).await;
+            neo_pixel.set_colors(&mut dma, &mut neo_pixel_data).await;
             Timer::after(Duration::from_millis(30)).await;
         } else {
             let ball_dir = neo_pixel_info.ball_dir;

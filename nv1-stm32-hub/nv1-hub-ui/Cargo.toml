@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-embedded-graphics = "0.8.1"
+embedded-graphics = "0.8.2"
 num-traits = { version = "0.2.19", default-features = false }
 
 [features]

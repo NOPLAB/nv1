@@ -29,6 +29,7 @@ use crate::settings::*;
 use crate::ui_system::UISystem;
 
 use core::mem::MaybeUninit;
+use core::ptr::addr_of_mut;
 use core::{borrow::Borrow, cell::RefCell};
 
 use alloc::rc::Rc;
@@ -36,22 +37,23 @@ use alloc::rc::Rc;
 use defmt::error;
 
 use embassy_executor::Spawner;
-use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::flash::Flash;
+use embassy_stm32::i2c::Master;
 use embassy_stm32::mode;
 use embassy_stm32::{
-    bind_interrupts,
+    bind_interrupts, dma,
     gpio::Pull,
     i2c::{self, I2c},
     peripherals,
     usart::{self, Uart},
 };
-use embassy_time::{with_timeout, Duration, Timer};
+use embassy_time::{Duration, Timer, with_timeout};
 use neo_pixel::NeoPixelPwm;
 use nv1_hub_ui::Event;
 use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::prelude::I2CInterface;
-use ssd1306::{size::DisplaySize128x64, I2CDisplayInterface, Ssd1306};
+use ssd1306::{I2CDisplayInterface, Ssd1306, size::DisplaySize128x64};
 use static_cell::StaticCell;
 
 #[cfg(not(feature = "defmt"))]
@@ -68,6 +70,14 @@ bind_interrupts!(struct Irqs {
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
     I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
     I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
+    DMA1_STREAM0 => dma::InterruptHandler<peripherals::DMA1_CH0>;
+    DMA1_STREAM1 => dma::InterruptHandler<peripherals::DMA1_CH1>;
+    DMA1_STREAM2 => dma::InterruptHandler<peripherals::DMA1_CH2>;
+    DMA1_STREAM3 => dma::InterruptHandler<peripherals::DMA1_CH3>;
+    DMA1_STREAM4 => dma::InterruptHandler<peripherals::DMA1_CH4>;
+    DMA2_STREAM1 => dma::InterruptHandler<peripherals::DMA2_CH1>;
+    DMA2_STREAM6 => dma::InterruptHandler<peripherals::DMA2_CH6>;
+    EXTI15_10 => exti::InterruptHandler<embassy_stm32::interrupt::typelevel::EXTI15_10>;
 });
 
 #[embassy_executor::main]
@@ -75,7 +85,7 @@ async fn main(spawner: Spawner) {
     // Initialize static heap
     {
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
-        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
+        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
 
     // Configure and initialize hardware
@@ -128,10 +138,10 @@ async fn main(spawner: Spawner) {
     let settings = Rc::new(RefCell::new(settings_data));
 
     // Initialize UI system
-    let gpio_ui_toggle = ExtiInput::new(p.PC12, p.EXTI12, Pull::None);
-    let gpio_ui_up = ExtiInput::new(p.PC13, p.EXTI13, Pull::None);
-    let gpio_ui_down = ExtiInput::new(p.PC14, p.EXTI14, Pull::None);
-    let gpio_ui_enter = ExtiInput::new(p.PC15, p.EXTI15, Pull::None);
+    let gpio_ui_toggle = ExtiInput::new(p.PC12, p.EXTI12, Pull::None, Irqs);
+    let gpio_ui_up = ExtiInput::new(p.PC13, p.EXTI13, Pull::None, Irqs);
+    let gpio_ui_down = ExtiInput::new(p.PC14, p.EXTI14, Pull::None, Irqs);
+    let gpio_ui_enter = ExtiInput::new(p.PC15, p.EXTI15, Pull::None, Irqs);
 
     let ssd1306_i2c = hardware::initialize_i2c(p.I2C3, p.PA8, p.PC9);
     let ssd1306_interface = I2CDisplayInterface::new(ssd1306_i2c);
@@ -144,14 +154,14 @@ async fn main(spawner: Spawner) {
 
     static SSD1306: StaticCell<
         Ssd1306<
-            I2CInterface<I2c<'static, embassy_stm32::mode::Blocking>>,
+            I2CInterface<I2c<'static, embassy_stm32::mode::Blocking, Master>>,
             DisplaySize128x64,
             BufferedGraphicsMode<DisplaySize128x64>,
         >,
     > = StaticCell::new();
 
     let ssd1306: &'static mut Ssd1306<
-        I2CInterface<I2c<'static, embassy_stm32::mode::Blocking>>,
+        I2CInterface<I2c<'static, embassy_stm32::mode::Blocking, Master>>,
         DisplaySize128x64,
         BufferedGraphicsMode<DisplaySize128x64>,
     > = SSD1306.init(ssd1306);
@@ -170,30 +180,31 @@ async fn main(spawner: Spawner) {
     // Initialize NeoPixel
     let neo_pixel_pwm = hardware::initialize_neo_pixel_pwm(p.TIM4, p.PB6, &hardware_config);
     let neo_pixel = NeoPixelPwm::new(neo_pixel_pwm, hardware_config.neo_pixel_pwm_hz);
-    static NEO_PIXEL_DMA: StaticCell<peripherals::DMA1_CH0> = StaticCell::new();
-    let neo_pixel_dma: &'static mut peripherals::DMA1_CH0 = NEO_PIXEL_DMA.init(p.DMA1_CH0);
 
     // Initialize motor controller
     let motor_controller = motor_controller::MotorController::new();
 
     // Spawn communication tasks
-    spawner.must_spawn(bno08x_task(uart_pins.uart_bno));
-    spawner.must_spawn(uart_jetson_task(uart_pins.uart_jetson));
+    spawner.spawn(bno08x_task(uart_pins.uart_bno).unwrap());
+    spawner.spawn(uart_jetson_task(uart_pins.uart_jetson).unwrap());
 
     // Spawn UI task if display initialized successfully
     if ssd1306_init_success {
-        spawner.must_spawn(ui_system::ui_task(
-            ui,
-            gpio_ui_up,
-            gpio_ui_down,
-            gpio_ui_enter,
-            shutdown.clone(),
-            reboot.clone(),
-        ));
+        spawner.spawn(
+            ui_system::ui_task(
+                ui,
+                gpio_ui_up,
+                gpio_ui_down,
+                gpio_ui_enter,
+                shutdown.clone(),
+                reboot.clone(),
+            )
+            .unwrap(),
+        );
     }
 
     // Spawn NeoPixel task
-    spawner.must_spawn(neo_pixel::neo_pixel_task(neo_pixel, neo_pixel_dma));
+    spawner.spawn(neo_pixel::neo_pixel_task(neo_pixel, p.DMA1_CH0).unwrap());
 
     // Create main loop context and run
     let mut main_loop_context = main_loop::MainLoopContext::new(
@@ -273,10 +284,6 @@ async fn uart_jetson_task(uart: Uart<'static, mode::Async>) {
         }
         match postcard::from_bytes_cobs::<nv1_msg::hub::ToHub>(&mut msg_with_cobs) {
             Ok(msg) => {
-                // info!("Linear X: {}", msg.vel.x);
-                // info!("Linear Y: {}", msg.vel.y);
-                // info!("Angular Z: {}", msg.vel.angle);
-
                 G_JETSON_RX.lock().await.replace(msg);
 
                 G_NEO_PIXEL_DATA.lock().await.jetson_connecting = true;
