@@ -91,6 +91,11 @@ where
         self.pwm
             .waveform::<Ch1, _, _>(dma.reborrow(), Irqs, Channel::Ch1, &duty)
             .await;
+        // embassy-stm32 0.6's `waveform` leaves CCR1 holding the final duty
+        // value, so the PWM keeps emitting that pulse width until the channel
+        // is disabled. Forcing CCR1 to 0 here gives a clean low for the LED
+        // reset gap (matches embassy-stm32 0.2's `waveform_ch1` behavior).
+        self.pwm.ch1().set_duty_cycle(0);
         self.pwm.ch1().disable();
     }
 
