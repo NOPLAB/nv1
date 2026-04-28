@@ -42,7 +42,7 @@ impl MainLoopContext {
     pub async fn run_main_loop(
         &mut self,
         mut adc_sensor: AdcSensor,
-        mut uart_md: Uart<'static, embassy_stm32::mode::Async>,
+        mut uart_md: Uart<'static, embassy_stm32::mode::Blocking>,
         mut adc_pins: (
             Peri<'static, peripherals::PC0>,
             Peri<'static, peripherals::PC1>,
@@ -113,12 +113,9 @@ impl MainLoopContext {
             };
 
             let md_data = postcard::to_vec_cobs::<nv1_msg::md::ToMD, 64>(&md_msg).unwrap();
-            match uart_md.write(&md_data).await {
-                Ok(_) => {}
-                Err(err) => {
-                    defmt::error!("[nv1-hub] UART MD Write error: {:?}", err);
-                }
-            };
+            if let Err(err) = uart_md.blocking_write(&md_data) {
+                defmt::error!("[nv1-hub] UART MD Write error: {:?}", err);
+            }
 
             let opp_color = settings.get_opp_color();
 

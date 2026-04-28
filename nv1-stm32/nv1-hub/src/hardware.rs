@@ -55,7 +55,7 @@ pub fn configure_clocks() -> embassy_stm32::Config {
 
 pub struct UartPins {
     pub uart_jetson: Uart<'static, embassy_stm32::mode::Async>,
-    pub uart_md: Uart<'static, embassy_stm32::mode::Async>,
+    pub uart_md: Uart<'static, embassy_stm32::mode::Blocking>,
     pub uart_bno: Uart<'static, embassy_stm32::mode::Async>,
 }
 
@@ -69,8 +69,6 @@ pub fn initialize_uarts(
     uart4: Peri<'static, peripherals::UART4>,
     pc11: Peri<'static, peripherals::PC11>,
     pc10: Peri<'static, peripherals::PC10>,
-    dma1_ch4: Peri<'static, peripherals::DMA1_CH4>,
-    dma1_ch2: Peri<'static, peripherals::DMA1_CH2>,
     usart6: Peri<'static, peripherals::USART6>,
     pc7: Peri<'static, peripherals::PC7>,
     pc6: Peri<'static, peripherals::PC6>,
@@ -95,10 +93,15 @@ pub fn initialize_uarts(
     )
     .unwrap();
 
-    // UART for Motor Driver communication
+    // UART for Motor Driver communication.
+    //
+    // Blocking (no DMA) so we can free DMA1 stream 2 (RX) and stream 4 (TX)
+    // for I2C3, which drives the OLED. At 2 Mbaud the ~10-byte frame takes
+    // ~50 µs of executor blocking per main-loop iteration, well below any
+    // deadline that matters.
     let mut uart_md_config = usart::Config::default();
     uart_md_config.baudrate = config.uart_md_baudrate;
-    let uart_md = Uart::new(uart4, pc11, pc10, dma1_ch4, dma1_ch2, Irqs, uart_md_config).unwrap();
+    let uart_md = Uart::new_blocking(uart4, pc11, pc10, uart_md_config).unwrap();
 
     // UART for BNO08x sensor
     let mut uart_bno_config = usart::Config::default();
@@ -158,11 +161,17 @@ pub fn initialize_i2c(
     i2c3: Peri<'static, peripherals::I2C3>,
     pa8: Peri<'static, peripherals::PA8>,
     pc9: Peri<'static, peripherals::PC9>,
-) -> I2c<'static, embassy_stm32::mode::Blocking, Master> {
+    tx_dma: Peri<'static, peripherals::DMA1_CH4>,
+    rx_dma: Peri<'static, peripherals::DMA1_CH2>,
+) -> I2c<'static, embassy_stm32::mode::Async, Master> {
+    use crate::Irqs;
+
     let mut config = i2c::Config::default();
     config.frequency = Hertz::khz(200);
     config.timeout = embassy_time::Duration::from_millis(10);
-    I2c::new_blocking(i2c3, pa8, pc9, config)
+    // Async + DMA so the OLED framebuffer flush (~50 ms at 200 kHz / 1024 B)
+    // does not block the executor and stall the MD UART send loop.
+    I2c::new(i2c3, pa8, pc9, tx_dma, rx_dma, Irqs, config)
 }
 
 pub fn initialize_neo_pixel_pwm(

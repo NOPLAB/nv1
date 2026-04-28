@@ -98,3 +98,89 @@ impl core::ops::Neg for Vector2 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn new_and_zero() {
+        let v = Vector2::new(3.0, 4.0);
+        assert_eq!(v.x, 3.0);
+        assert_eq!(v.y, 4.0);
+        assert_eq!(Vector2::zero(), Vector2::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn magnitude_3_4_5() {
+        assert!(approx(Vector2::new(3.0, 4.0).magnitude(), 5.0));
+        assert!(approx(Vector2::new(-3.0, -4.0).magnitude(), 5.0));
+        assert!(approx(Vector2::zero().magnitude(), 0.0));
+    }
+
+    #[test]
+    fn angle_axes() {
+        assert!(approx(Vector2::new(1.0, 0.0).angle(), 0.0));
+        assert!(approx(Vector2::new(0.0, 1.0).angle(), FRAC_PI_2));
+        assert!(approx(Vector2::new(-1.0, 0.0).angle().abs(), PI));
+        assert!(approx(Vector2::new(1.0, 1.0).angle(), FRAC_PI_4));
+    }
+
+    #[test]
+    fn normalized_unit_length() {
+        let v = Vector2::new(3.0, 4.0).normalized();
+        assert!(approx(v.magnitude(), 1.0));
+        assert!(approx(v.x, 0.6));
+        assert!(approx(v.y, 0.8));
+    }
+
+    #[test]
+    fn normalized_zero_returns_zero() {
+        // Zero vector has no defined direction; normalized() must return zero,
+        // not NaN, so downstream math (angle, dot product) stays finite.
+        assert_eq!(Vector2::zero().normalized(), Vector2::zero());
+    }
+
+    #[test]
+    fn dot_orthogonal_is_zero() {
+        let a = Vector2::new(1.0, 0.0);
+        let b = Vector2::new(0.0, 1.0);
+        assert!(approx(a.dot(&b), 0.0));
+    }
+
+    #[test]
+    fn dot_parallel_is_product_of_magnitudes() {
+        let a = Vector2::new(2.0, 0.0);
+        let b = Vector2::new(3.0, 0.0);
+        assert!(approx(a.dot(&b), 6.0));
+    }
+
+    #[test]
+    fn distance_to_pythagorean() {
+        let a = Vector2::new(0.0, 0.0);
+        let b = Vector2::new(3.0, 4.0);
+        assert!(approx(a.distance_to(&b), 5.0));
+        assert!(approx(b.distance_to(&a), 5.0));
+    }
+
+    #[test]
+    fn add_sub_neg() {
+        let a = Vector2::new(1.0, 2.0);
+        let b = Vector2::new(3.0, 5.0);
+        assert_eq!(a + b, Vector2::new(4.0, 7.0));
+        assert_eq!(b - a, Vector2::new(2.0, 3.0));
+        assert_eq!(-a, Vector2::new(-1.0, -2.0));
+    }
+
+    #[test]
+    fn scalar_mul_div() {
+        let v = Vector2::new(2.0, -3.0);
+        assert_eq!(v * 4.0, Vector2::new(8.0, -12.0));
+        assert_eq!(v / 2.0, Vector2::new(1.0, -1.5));
+    }
+}

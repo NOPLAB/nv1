@@ -39,7 +39,7 @@ libm = "0.2.16"
 panic-halt = "1.0.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 pid = "4.0.0"
-ssd1306 = "0.10.0"
+ssd1306 = { version = "0.10.0", features = ["async"] }
 embedded-graphics = "0.8.2"
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 bno08x-rvc = "0.1.2"

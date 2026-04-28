@@ -3,14 +3,14 @@ use defmt::error;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::i2c::{I2c, Master};
 use nv1_hub_ui::{Event, EventKey, HubUI};
-use ssd1306::mode::{BufferedGraphicsMode, DisplayConfig};
+use ssd1306::mode::{BufferedGraphicsModeAsync, DisplayConfigAsync};
 use ssd1306::prelude::I2CInterface;
-use ssd1306::{size::DisplaySize128x64, Ssd1306};
+use ssd1306::{size::DisplaySize128x64, Ssd1306Async};
 
-pub type DisplayType = Ssd1306<
-    I2CInterface<I2c<'static, embassy_stm32::mode::Blocking, Master>>,
+pub type DisplayType = Ssd1306Async<
+    I2CInterface<I2c<'static, embassy_stm32::mode::Async, Master>>,
     DisplaySize128x64,
-    BufferedGraphicsMode<DisplaySize128x64>,
+    BufferedGraphicsModeAsync<DisplaySize128x64>,
 >;
 
 #[allow(dead_code)]
@@ -37,9 +37,9 @@ impl UISystem {
         }
     }
 
-    pub fn try_initialize_display(display: &mut DisplayType) -> bool {
+    pub async fn try_initialize_display(display: &mut DisplayType) -> bool {
         for _ in 0..10 {
-            match display.init() {
+            match display.init().await {
                 Ok(_) => return true,
                 Err(_) => {
                     error!("Can't initialize ssd1306");
@@ -283,7 +283,7 @@ pub async fn ui_task(
                 };
 
                 let display = ui.update(&event);
-                let _ = display.flush();
+                let _ = display.flush().await;
 
                 if *shutdown.borrow() {
                     shutdown.replace(false);
@@ -297,7 +297,7 @@ pub async fn ui_task(
             }
             embassy_futures::select::Either::Second(_) => {
                 let display = ui.update(&Event::None);
-                let _ = display.flush();
+                let _ = display.flush().await;
             }
         }
     }
