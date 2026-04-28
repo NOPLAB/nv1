@@ -19,6 +19,8 @@ pub struct MainLoopContext {
     pub settings: Rc<RefCell<Settings>>,
     pub value_line: Rc<RefCell<f32>>,
     pub value_have_ball: Rc<RefCell<u32>>,
+    pub wheel_speeds: Rc<RefCell<[f32; 4]>>,
+    pub ball_angle: Rc<RefCell<f32>>,
     pub gpio_ui_toggle: ExtiInput<'static, embassy_stm32::mode::Async>,
 }
 
@@ -28,6 +30,8 @@ impl MainLoopContext {
         settings: Rc<RefCell<Settings>>,
         value_line: Rc<RefCell<f32>>,
         value_have_ball: Rc<RefCell<u32>>,
+        wheel_speeds: Rc<RefCell<[f32; 4]>>,
+        ball_angle: Rc<RefCell<f32>>,
         gpio_ui_toggle: ExtiInput<'static, embassy_stm32::mode::Async>,
     ) -> Self {
         Self {
@@ -35,6 +39,8 @@ impl MainLoopContext {
             settings,
             value_line,
             value_have_ball,
+            wheel_speeds,
+            ball_angle,
             gpio_ui_toggle,
         }
     }
@@ -42,7 +48,7 @@ impl MainLoopContext {
     pub async fn run_main_loop(
         &mut self,
         mut adc_sensor: AdcSensor,
-        mut uart_md: Uart<'static, embassy_stm32::mode::Blocking>,
+        mut uart_md: Uart<'static, embassy_stm32::mode::Async>,
         mut adc_pins: (
             Peri<'static, peripherals::PC0>,
             Peri<'static, peripherals::PC1>,
@@ -93,6 +99,9 @@ impl MainLoopContext {
                 .motor_controller
                 .calculate_motor_values(vel_x, vel_y, yaw);
 
+            self.wheel_speeds.replace([motor1, motor2, motor3, motor4]);
+            self.ball_angle.replace(sensor_readings.ir_angle);
+
             let pause = self.gpio_ui_toggle.is_high();
             let md_msg = if pause {
                 nv1_msg::md::ToMD {
@@ -113,7 +122,12 @@ impl MainLoopContext {
             };
 
             let md_data = postcard::to_vec_cobs::<nv1_msg::md::ToMD, 64>(&md_msg).unwrap();
-            if let Err(err) = uart_md.blocking_write(&md_data) {
+            // `write().await` (not `blocking_write`): this await is the loop's
+            // yield point at steady state. Every other await above is a mutex
+            // lock that resolves immediately when uncontended, so removing the
+            // DMA wait here starves the NeoPixel / UI / BNO08x tasks. See the
+            // matching `uart_md` setup comment in hardware.rs.
+            if let Err(err) = uart_md.write(&md_data).await {
                 defmt::error!("[nv1-hub] UART MD Write error: {:?}", err);
             }
 

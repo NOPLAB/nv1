@@ -1113,6 +1113,7 @@ name = "nv1-hub-ui"
 version = "0.1.0"
 dependencies = [
  "embedded-graphics",
+ "libm",
  "num-traits",
 ]
 
@@ -1597,7 +1598,6 @@ dependencies = [
  "display-interface-spi",
  "embedded-graphics-core",
  "embedded-hal 1.0.0",
- "embedded-hal-async",
  "maybe-async-cfg",
 ]
 

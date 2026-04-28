@@ -53,8 +53,8 @@ mod tests {
 
     #[test]
     fn pure_rotation_independent_of_wheel_angle() {
-        let speeds: [f32; 4] = [45.0, 135.0, 225.0, 315.0]
-            .map(|a| wheel(a).calculate(0.0, 0.0, 0.0, 1.0));
+        let speeds: [f32; 4] =
+            [45.0, 135.0, 225.0, 315.0].map(|a| wheel(a).calculate(0.0, 0.0, 0.0, 1.0));
         for s in &speeds {
             assert!(approx(*s, speeds[0]));
         }

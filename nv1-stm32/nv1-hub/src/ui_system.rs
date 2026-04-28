@@ -3,14 +3,14 @@ use defmt::error;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::i2c::{I2c, Master};
 use nv1_hub_ui::{Event, EventKey, HubUI};
-use ssd1306::mode::{BufferedGraphicsModeAsync, DisplayConfigAsync};
+use ssd1306::mode::{BufferedGraphicsMode, DisplayConfig};
 use ssd1306::prelude::I2CInterface;
-use ssd1306::{size::DisplaySize128x64, Ssd1306Async};
+use ssd1306::{size::DisplaySize128x64, Ssd1306};
 
-pub type DisplayType = Ssd1306Async<
-    I2CInterface<I2c<'static, embassy_stm32::mode::Async, Master>>,
+pub type DisplayType = Ssd1306<
+    I2CInterface<I2c<'static, embassy_stm32::mode::Blocking, Master>>,
     DisplaySize128x64,
-    BufferedGraphicsModeAsync<DisplaySize128x64>,
+    BufferedGraphicsMode<DisplaySize128x64>,
 >;
 
 #[allow(dead_code)]
@@ -37,9 +37,9 @@ impl UISystem {
         }
     }
 
-    pub async fn try_initialize_display(display: &mut DisplayType) -> bool {
+    pub fn try_initialize_display(display: &mut DisplayType) -> bool {
         for _ in 0..10 {
-            match display.init().await {
+            match display.init() {
                 Ok(_) => return true,
                 Err(_) => {
                     error!("Can't initialize ssd1306");
@@ -63,11 +63,15 @@ impl UISystem {
         alloc::rc::Rc<core::cell::RefCell<bool>>,
         alloc::rc::Rc<core::cell::RefCell<f32>>,
         alloc::rc::Rc<core::cell::RefCell<u32>>,
+        alloc::rc::Rc<core::cell::RefCell<[f32; 4]>>,
+        alloc::rc::Rc<core::cell::RefCell<f32>>,
     ) {
         let shutdown = alloc::rc::Rc::new(core::cell::RefCell::new(false));
         let reboot = alloc::rc::Rc::new(core::cell::RefCell::new(false));
         let value_line = alloc::rc::Rc::new(core::cell::RefCell::new(0.0));
         let value_have_ball = alloc::rc::Rc::new(core::cell::RefCell::new(0u32));
+        let wheel_speeds = alloc::rc::Rc::new(core::cell::RefCell::new([0.0_f32; 4]));
+        let ball_angle = alloc::rc::Rc::new(core::cell::RefCell::new(0.0_f32));
 
         use crate::settings::{flash_write, GoalColor};
         use alloc::{boxed::Box, vec::Vec};
@@ -239,16 +243,32 @@ impl UISystem {
                     cursor_line_len: 4,
                 },
             ),
-            nv1_hub_ui::menu::RobotStatusMenu::new(nv1_hub_ui::menu::RobotStatusMenuOption {
-                position: Point::new(2, 2),
-                size: Size::new(56, 56),
-            })
+            nv1_hub_ui::menu::RobotStatusMenu::new(
+                nv1_hub_ui::menu::RobotStatusMenuOption {
+                    position: Point::new(0, 0),
+                    size: Size::new(64, 64),
+                    // Motor setpoints are in rev/s (omni rad/s divided by 2π);
+                    // ~6–8 rev/s is typical at full robot speed, so saturate
+                    // the arrow at 10 rev/s.
+                    max_wheel_speed: 10.0,
+                },
+                wheel_speeds.clone(),
+                ball_angle.clone(),
+            )
         ];
 
         let ui_option = nv1_hub_ui::HubUIOption {};
 
         let ui = nv1_hub_ui::HubUI::new(ssd1306, menu, ui_option);
-        (ui, shutdown, reboot, value_line, value_have_ball)
+        (
+            ui,
+            shutdown,
+            reboot,
+            value_line,
+            value_have_ball,
+            wheel_speeds,
+            ball_angle,
+        )
     }
 }
 
@@ -283,7 +303,7 @@ pub async fn ui_task(
                 };
 
                 let display = ui.update(&event);
-                let _ = display.flush().await;
+                let _ = display.flush();
 
                 if *shutdown.borrow() {
                     shutdown.replace(false);
@@ -297,7 +317,7 @@ pub async fn ui_task(
             }
             embassy_futures::select::Either::Second(_) => {
                 let display = ui.update(&Event::None);
-                let _ = display.flush().await;
+                let _ = display.flush();
             }
         }
     }

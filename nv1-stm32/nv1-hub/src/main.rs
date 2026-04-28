@@ -52,9 +52,9 @@ use embassy_stm32::{
 use embassy_time::{with_timeout, Duration, Timer};
 use neo_pixel::NeoPixelPwm;
 use nv1_hub_ui::Event;
-use ssd1306::mode::BufferedGraphicsModeAsync;
+use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::prelude::I2CInterface;
-use ssd1306::{size::DisplaySize128x64, I2CDisplayInterface, Ssd1306Async};
+use ssd1306::{size::DisplaySize128x64, I2CDisplayInterface, Ssd1306};
 use static_cell::StaticCell;
 
 #[cfg(not(feature = "defmt"))]
@@ -103,22 +103,19 @@ async fn main(spawner: Spawner) {
         p.UART4,
         p.PC11,
         p.PC10,
+        p.DMA1_CH4,
+        p.DMA1_CH2,
         p.USART6,
         p.PC7,
         p.PC6,
         p.DMA2_CH6,
         p.DMA2_CH1,
-        p.PA0,
         &hardware_config,
     );
 
-    // Reset BNO08x sensor - handle timing that was moved out of hardware init
-    {
-        use embassy_time::{Duration, Timer};
-        Timer::after(Duration::from_millis(10)).await;
-        // GPIO reset is handled inside initialize_uarts
-        Timer::after(Duration::from_millis(100)).await;
-    }
+    // Drive BNO08x nRESET (PA0) low for 10ms then release it high before reading
+    // the IMU UART. The Output must outlive main_loop so PA0 stays driven high.
+    let _bno08x_reset = hardware::reset_bno08x(p.PA0).await;
 
     // Initialize sensor system
     let (adc, line_s0, line_s1, line_s2, line_s3, ir_s0, ir_s1, ir_s2, ir_s3) =
@@ -142,9 +139,9 @@ async fn main(spawner: Spawner) {
     let gpio_ui_down = ExtiInput::new(p.PC14, p.EXTI14, Pull::None, Irqs);
     let gpio_ui_enter = ExtiInput::new(p.PC15, p.EXTI15, Pull::None, Irqs);
 
-    let ssd1306_i2c = hardware::initialize_i2c(p.I2C3, p.PA8, p.PC9, p.DMA1_CH4, p.DMA1_CH2);
+    let ssd1306_i2c = hardware::initialize_i2c(p.I2C3, p.PA8, p.PC9);
     let ssd1306_interface = I2CDisplayInterface::new(ssd1306_i2c);
-    let ssd1306 = Ssd1306Async::new(
+    let ssd1306 = Ssd1306::new(
         ssd1306_interface,
         DisplaySize128x64,
         ssd1306::prelude::DisplayRotation::Rotate0,
@@ -152,28 +149,28 @@ async fn main(spawner: Spawner) {
     .into_buffered_graphics_mode();
 
     static SSD1306: StaticCell<
-        Ssd1306Async<
-            I2CInterface<I2c<'static, embassy_stm32::mode::Async, Master>>,
+        Ssd1306<
+            I2CInterface<I2c<'static, embassy_stm32::mode::Blocking, Master>>,
             DisplaySize128x64,
-            BufferedGraphicsModeAsync<DisplaySize128x64>,
+            BufferedGraphicsMode<DisplaySize128x64>,
         >,
     > = StaticCell::new();
 
-    let ssd1306: &'static mut Ssd1306Async<
-        I2CInterface<I2c<'static, embassy_stm32::mode::Async, Master>>,
+    let ssd1306: &'static mut Ssd1306<
+        I2CInterface<I2c<'static, embassy_stm32::mode::Blocking, Master>>,
         DisplaySize128x64,
-        BufferedGraphicsModeAsync<DisplaySize128x64>,
+        BufferedGraphicsMode<DisplaySize128x64>,
     > = SSD1306.init(ssd1306);
 
-    let mut ssd1306_init_success = UISystem::try_initialize_display(ssd1306).await;
+    let mut ssd1306_init_success = UISystem::try_initialize_display(ssd1306);
 
     // Create and configure UI elements
-    let (mut ui, shutdown, reboot, value_line, value_have_ball) =
+    let (mut ui, shutdown, reboot, value_line, value_have_ball, wheel_speeds, ball_angle) =
         ui_system::UISystem::create_ui_system(ssd1306, settings.clone(), f.clone());
 
     let display = ui.update(&Event::None);
     if ssd1306_init_success {
-        ssd1306_init_success = display.flush().await.is_ok();
+        ssd1306_init_success = display.flush().is_ok();
     }
 
     // Initialize NeoPixel
@@ -211,6 +208,8 @@ async fn main(spawner: Spawner) {
         settings,
         value_line,
         value_have_ball,
+        wheel_speeds,
+        ball_angle,
         gpio_ui_toggle,
     );
 

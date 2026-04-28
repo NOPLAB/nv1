@@ -61,7 +61,7 @@ serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 # Graphics / display
 embedded-graphics = "0.8.2"
 embedded-graphics-simulator = "0.8.0"
-ssd1306 = { version = "0.10.0", features = ["async"] }
+ssd1306 = "0.10.0"
 
 # Hub-specific peripherals
 bbqueue = "0.5.1"

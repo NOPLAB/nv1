@@ -105,6 +105,12 @@ pub async fn neo_pixel_task(
                 RGB8 { r: 255, g: 0, b: 0 }
             };
 
+            // Clear before painting so the moving 3-LED blob doesn't leave a
+            // trail of previously-painted LEDs behind it.
+            for c in neo_pixel_data.iter_mut() {
+                *c = RGB8 { r: 0, g: 0, b: 0 };
+            }
+
             let base_index = loop_count % LED_COUNT;
             let spread = SPREAD_PATTERN[loop_count % 32];
             for j in 0..3 {
@@ -134,6 +140,7 @@ pub async fn neo_pixel_task(
                 neo_pixel_data[i] = color;
             }
 
+            neo_pixel.set_colors(&mut dma, &mut neo_pixel_data).await;
             Timer::after(Duration::from_millis(100)).await;
         }
 

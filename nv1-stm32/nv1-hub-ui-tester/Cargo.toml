@@ -3,10 +3,6 @@ name = "nv1-hub-ui-tester"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-no_std = ["nv1-hub-ui/no_std"]
-defeault = ["no_std"]
-
 [dependencies]
 
 [target.'cfg(not(target_os = "none"))'.dependencies]

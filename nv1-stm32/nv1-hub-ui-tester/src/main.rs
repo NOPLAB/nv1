@@ -9,6 +9,8 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[cfg(not(target_os = "none"))]
 use core::cell::RefCell;
+#[cfg(not(target_os = "none"))]
+use std::sync::Mutex;
 
 #[cfg(not(target_os = "none"))]
 static G_SHUTDOWN: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
@@ -18,7 +20,8 @@ static G_REBOOT: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
 
 #[cfg(not(target_os = "none"))]
 fn main() -> anyhow::Result<()> {
-    use core::cell::RefCell;
+    use std::rc::Rc;
+
     use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
     use embedded_graphics_simulator::{
         sdl2::Keycode, BinaryColorTheme, OutputSettingsBuilder, SimulatorDisplay, SimulatorEvent,
@@ -33,7 +36,6 @@ fn main() -> anyhow::Result<()> {
         menu::{ListMenu, ListMenuOption},
         Event, EventKey, HubUI, HubUIOption,
     };
-    use std::sync::Mutex;
 
     println!("Hello, world!");
 
@@ -80,6 +82,9 @@ fn main() -> anyhow::Result<()> {
         ui_line
     ];
 
+    let wheel_speeds = Rc::new(RefCell::new([0.0_f32; 4]));
+    let ball_angle = Rc::new(RefCell::new(0.0_f32));
+
     let menu = menus![
         SimulatorDisplay<BinaryColor>,
         ListMenu::new(
@@ -92,16 +97,35 @@ fn main() -> anyhow::Result<()> {
                 cursor_line_len: 4,
             },
         ),
-        RobotStatusMenu::new(RobotStatusMenuOption {
-            position: Point::new(8, 8),
-            size: Size::new(48, 48),
-        })
+        RobotStatusMenu::new(
+            RobotStatusMenuOption {
+                position: Point::new(0, 0),
+                size: Size::new(64, 64),
+                max_wheel_speed: 1.0,
+            },
+            wheel_speeds.clone(),
+            ball_angle.clone(),
+        )
     ];
     let mut ui = HubUI::new(&mut display, menu, ui_option);
 
     let mut ui_event = Event::None;
+    let mut tick: f32 = 0.0;
 
     'running: loop {
+        // Animate the four wheel speeds so the rotation arrows are visible
+        // in the simulator. The phase offsets give each wheel a distinct
+        // direction over time; magnitudes sweep through ±max_wheel_speed.
+        tick += 0.04;
+        wheel_speeds.borrow_mut().copy_from_slice(&[
+            tick.sin(),
+            (tick + 1.5).sin(),
+            (tick + 3.0).sin(),
+            (tick + 4.5).sin(),
+        ]);
+        // Spin the IR ball direction triangle slowly around the chassis.
+        ball_angle.replace(tick * 0.3);
+
         let mut display = ui.update(&ui_event);
         window.update(&mut display);
 

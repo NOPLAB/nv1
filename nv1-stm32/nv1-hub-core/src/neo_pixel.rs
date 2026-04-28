@@ -148,17 +148,29 @@ mod tests {
         // Bytes 0..8 = G, MSB first. G's set bit is index 1 (0b0100_0000
         // → second-most-significant position).
         for (i, &d) in buf[0..8].iter().enumerate() {
-            let expected = if i == 1 { duties.one_duty } else { duties.zero_duty };
+            let expected = if i == 1 {
+                duties.one_duty
+            } else {
+                duties.zero_duty
+            };
             assert_eq!(d, expected, "G bit {i} mismatch");
         }
         // Bytes 8..16 = R, MSB first. R's set bit is index 0.
         for (i, &d) in buf[8..16].iter().enumerate() {
-            let expected = if i == 0 { duties.one_duty } else { duties.zero_duty };
+            let expected = if i == 0 {
+                duties.one_duty
+            } else {
+                duties.zero_duty
+            };
             assert_eq!(d, expected, "R bit {i} mismatch");
         }
         // Bytes 16..24 = B, MSB first. B's set bit is index 2.
         for (i, &d) in buf[16..24].iter().enumerate() {
-            let expected = if i == 2 { duties.one_duty } else { duties.zero_duty };
+            let expected = if i == 2 {
+                duties.one_duty
+            } else {
+                duties.zero_duty
+            };
             assert_eq!(d, expected, "B bit {i} mismatch");
         }
     }

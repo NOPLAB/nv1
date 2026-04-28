@@ -6,3 +6,4 @@ target = "thumbv7em-none-eabi"
 
 [env]
 DEFMT_LOG = "trace"
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
