@@ -101,35 +101,27 @@ impl AdcSensor {
         use embassy_stm32::adc::SampleTime;
         let sample_time = SampleTime::CYCLES56;
 
-        let mut adc_line = [0u16; LINE_SENSORS_COUNT];
-        let mut adc_ir = [0u16; IR_SENSORS_COUNT];
+        let mut adc_line_raw = [0u16; LINE_SENSORS_COUNT];
+        let mut adc_ir_raw = [0u16; IR_SENSORS_COUNT];
         let adc_have_ball = self.adc.blocking_read(pc3, sample_time);
 
         for i in 0..IR_SENSORS_COUNT {
             self.set_multiplexer_pins(i);
 
-            adc_line[i] = self.adc.blocking_read(pc0, sample_time);
-            adc_line[i + IR_SENSORS_COUNT] = self.adc.blocking_read(pc1, sample_time);
-            adc_ir[i] = self.adc.blocking_read(pc2, sample_time);
+            adc_line_raw[i] = self.adc.blocking_read(pc0, sample_time);
+            adc_line_raw[i + IR_SENSORS_COUNT] = self.adc.blocking_read(pc1, sample_time);
+            adc_ir_raw[i] = self.adc.blocking_read(pc2, sample_time);
         }
 
-        let adc_line = adc_line
-            .iter()
-            .map(|x| (*x as f32) / ADC_RESOLUTION)
-            .collect::<alloc::vec::Vec<_>>();
+        let mut adc_line = [0.0f32; LINE_SENSORS_COUNT];
+        for (dst, &src) in adc_line.iter_mut().zip(adc_line_raw.iter()) {
+            *dst = src as f32 / ADC_RESOLUTION;
+        }
 
-        adc_ir.iter_mut().for_each(|x| *x = 4096 - *x);
-        let adc_ir = adc_ir
-            .iter()
-            .map(|x| (*x as f32) / ADC_RESOLUTION)
-            .collect::<alloc::vec::Vec<_>>();
-
-        let line_vector = calculate_line_vec_with_threshold(
-            &adc_line,
-            &self.line_sensor.sin_values,
-            &self.line_sensor.cos_values,
-            0.1, // Default threshold - will be overridden by caller
-        );
+        let mut adc_ir = [0.0f32; IR_SENSORS_COUNT];
+        for (dst, &src) in adc_ir.iter_mut().zip(adc_ir_raw.iter()) {
+            *dst = (4096 - src) as f32 / ADC_RESOLUTION;
+        }
 
         let (ir_x, ir_y, _ir_strength) = calculate_adc_vec(
             &adc_ir,
@@ -141,7 +133,6 @@ impl AdcSensor {
         let adc_line_max = adc_line.iter().cloned().reduce(f32::max).unwrap_or(0.0);
 
         SensorReadings {
-            line_vector,
             ir_angle,
             ir_position: Vector2::new(ir_x, ir_y),
             adc_have_ball,
@@ -172,11 +163,9 @@ impl AdcSensor {
 }
 
 pub struct SensorReadings {
-    #[allow(dead_code)]
-    pub line_vector: Option<Vector2>,
     pub ir_angle: f32,
     pub ir_position: Vector2,
     pub adc_have_ball: u16,
     pub adc_line_max: f32,
-    pub adc_line: alloc::vec::Vec<f32>,
+    pub adc_line: [f32; LINE_SENSORS_COUNT],
 }
