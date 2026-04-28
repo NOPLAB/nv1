@@ -49,6 +49,10 @@ impl LineProcessor {
         line_vector: Option<Vector2>,
         _threshold: f32,
     ) -> Option<Vector2> {
+        // Reject NaN/inf inputs at the boundary so a single bad reading
+        // never poisons the latched state (first_angle, first_x, first_y
+        // would carry NaN forward through every subsequent tick).
+        let line_vector = line_vector.filter(|v| v.x.is_finite() && v.y.is_finite());
         match self.state {
             AdcState::OnGround => self.handle_on_ground_state(line_vector),
             AdcState::OnLine(first_angle, first_x, first_y, counter) => {
@@ -268,6 +272,28 @@ mod tests {
             let _ = p.process_line(None, 0.1);
         }
         assert!(matches_on_ground(&p.state));
+    }
+
+    #[test]
+    fn nan_input_treated_as_no_line_from_ground() {
+        let mut p = LineProcessor::new();
+        let nan_vec = Some(Vector2::new(f32::NAN, 0.0));
+        assert!(p.process_line(nan_vec, 0.1).is_none());
+        assert!(matches_on_ground(&p.state));
+    }
+
+    #[test]
+    fn nan_input_does_not_corrupt_latched_state() {
+        let mut p = LineProcessor::new();
+        // Latch onto a real reading first.
+        p.process_line(Some(Vector2::new(1.0, 0.0)), 0.1);
+        // A subsequent NaN reading must be filtered to None (treated as
+        // dropout) — it must not overwrite the first_x/first_y fields
+        // with NaN, which would propagate forever.
+        let _ = p.process_line(Some(Vector2::new(f32::NAN, f32::NAN)), 0.1);
+        let out = p.process_line(None, 0.1).unwrap();
+        assert!(out.x.is_finite() && out.y.is_finite());
+        assert!((out.x - -1.0).abs() < 1e-5);
     }
 
     #[test]

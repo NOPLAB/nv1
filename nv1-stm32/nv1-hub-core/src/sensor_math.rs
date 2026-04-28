@@ -85,7 +85,15 @@ pub fn calculate_line_vec_with_threshold(
         return None;
     }
 
-    let norm = libm::sqrtf(libm::powf(sum_x, 2.0) + libm::powf(sum_y, 2.0));
+    let norm = libm::sqrtf(sum_x * sum_x + sum_y * sum_y);
+    // Diametrically opposed sensors can cancel to (near) zero. We must
+    // not divide by it: a zero norm yields NaN, and a tiny norm produced
+    // by f32 sin/cos rounding noise yields a meaningless direction.
+    // 1e-3 is well below the unit contribution of any single real sensor
+    // and well above floating-point residue from a 32-channel LUT.
+    if norm < 1e-3 {
+        return None;
+    }
     Some(Vector2::new(sum_x / norm, sum_y / norm))
 }
 
@@ -116,6 +124,17 @@ mod tests {
         let mut sin = [0.0f32; 4];
         let mut cos = [0.0f32; 4];
         generate_adc_vec(&mut sin, &mut cos, 0.0, FRAC_PI_2, 1.0);
+        assert!(calculate_line_vec_with_threshold(&adc, &sin, &cos, 0.1).is_none());
+    }
+
+    #[test]
+    fn line_vec_returns_none_when_symmetric_sensors_cancel() {
+        // Diametrically opposed sensors fire equally → vector sum is zero.
+        // Must return None so the controller doesn't get NaN.
+        let mut sin = [0.0f32; 4];
+        let mut cos = [0.0f32; 4];
+        generate_adc_vec(&mut sin, &mut cos, 0.0, FRAC_PI_2, 1.0);
+        let adc = [0.5, 0.0, 0.5, 0.0];
         assert!(calculate_line_vec_with_threshold(&adc, &sin, &cos, 0.1).is_none());
     }
 
