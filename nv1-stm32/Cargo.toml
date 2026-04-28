@@ -4,6 +4,7 @@ members = [
     "nv1-md",
     "nv1-md-core",
     "nv1-hub",
+    "nv1-hub-core",
     "nv1-hub-ui",
     "nv1-hub-ui-tester",
 ]

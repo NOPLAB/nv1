@@ -3,17 +3,18 @@
 #![feature(impl_trait_in_assoc_type)]
 
 mod communication;
-mod constants;
 mod fmt;
 mod hardware;
 mod main_loop;
 mod motor_controller;
 mod neo_pixel;
-mod omni;
 mod sensors;
 mod settings;
-mod types;
 mod ui_system;
+
+pub use nv1_hub_core::constants;
+pub use nv1_hub_core::omni;
+pub use nv1_hub_core::types;
 
 extern crate alloc;
 

@@ -1082,6 +1082,7 @@ dependencies = [
  "embedded-hal-compat",
  "libm",
  "num-traits",
+ "nv1-hub-core",
  "nv1-hub-ui",
  "nv1-msg",
  "panic-halt",
@@ -1092,6 +1093,18 @@ dependencies = [
  "serde",
  "ssd1306",
  "static_cell",
+]
+
+[[package]]
+name = "nv1-hub-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "num-traits",
+ "nv1-msg",
+ "pid",
+ "postcard 1.1.3",
+ "serde",
 ]
 
 [[package]]

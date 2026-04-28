@@ -7,6 +7,7 @@ version = "0.1.0"
 forced-target = "thumbv7em-none-eabi"
 
 [dependencies]
+nv1-hub-core = { path = "../nv1-hub-core" }
 nv1-hub-ui = { path = "../nv1-hub-ui", features = ["no_std"] }
 nv1-msg = { path = "../../nv1-msg" }
 
